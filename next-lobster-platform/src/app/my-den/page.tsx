@@ -1,0 +1,487 @@
+'use client';
+
+import { useState, useEffect } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
+import Link from 'next/link';
+import { useStore } from '@/store/useStore';
+import { Lobster, Cave } from '@/types';
+import { LobsterCard } from '@/components/lobster/LobsterCard';
+import { LobsterSprite } from '@/components/lobster/LobsterSprite';
+import { PixelButton } from '@/components/ui/PixelButton';
+import { BackButton } from '@/components/ui/BackButton';
+
+const CAVE_COLORS = ['#3b82f6', '#22c55e', '#a855f7', '#f97316', '#ec4899', '#14b8a6'];
+
+function CaveSection({
+  cave,
+  lobsters,
+  onDeleteCave,
+  onOpenAddLobster,
+  onMoveToCave,
+}: {
+  cave: Cave;
+  lobsters: Lobster[];
+  onDeleteCave: (id: string) => void;
+  onOpenAddLobster?: (caveId: string) => void;
+  onMoveToCave?: (lobsterId: string, caveId: string | null) => void;
+}) {
+  const [expanded, setExpanded] = useState(true);
+  const isUnassigned = cave.id === '__unassigned__';
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="mb-6"
+    >
+      {/* Cave Header */}
+      <div
+        className="border-4 border-pixel-black p-4 cursor-pointer flex items-center gap-4"
+        style={{ background: cave.color, boxShadow: '5px 5px 0px 0px #101010' }}
+        onClick={() => setExpanded(!expanded)}
+      >
+        <div
+          className="w-12 h-12 rounded-full border-4 border-pixel-black flex items-center justify-center font-pixel text-white text-xl font-bold"
+          style={{ background: cave.color, filter: 'brightness(0.8)' }}
+        >
+          {cave.name.charAt(0)}
+        </div>
+        <div className="flex-1">
+          <h2 className="font-pixel text-xl text-white font-bold">{cave.name}</h2>
+          <p className="font-pixel text-white/80 text-sm">{lobsters.length} 只龙虾</p>
+        </div>
+        <div className="flex items-center gap-3 shrink-0">
+          {!isUnassigned && onOpenAddLobster && (
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); onOpenAddLobster(cave.id); }}
+              className="px-3 py-1 bg-pixel-white text-pixel-black border-2 border-pixel-black font-pixel text-xs font-bold hover:bg-pixel-yellow transition-colors"
+              style={{ boxShadow: '2px 2px 0px 0px #101010' }}
+            >
+              + 添加龙虾
+            </button>
+          )}
+          {!isUnassigned && (
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); onDeleteCave(cave.id); }}
+              className="px-3 py-1 bg-pixel-red text-pixel-white border-2 border-pixel-black font-pixel text-xs font-bold hover:bg-pixel-orange transition-colors"
+              style={{ boxShadow: '2px 2px 0px 0px #101010' }}
+            >
+              删除窝
+            </button>
+          )}
+          <div className="font-pixel text-white text-2xl font-bold">
+            {expanded ? '▲' : '▼'}
+          </div>
+        </div>
+      </div>
+
+      {/* Cave Content */}
+      <AnimatePresence>
+        {expanded && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.3 }}
+            className="overflow-hidden"
+          >
+            <div className="border-4 border-t-0 border-pixel-black p-4 bg-pixel-white/80" style={{ borderColor: '#101010' }}>
+              {lobsters.length > 0 ? (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 items-stretch">
+                  {lobsters.map((lobster: Lobster, index: number) => (
+                    <div key={lobster.id} className="flex flex-col gap-2 h-full min-h-0">
+                      <motion.div
+                        className="flex-1 min-h-0 flex flex-col"
+                        initial={{ opacity: 0, scale: 0.9 }}
+                        animate={{ opacity: 1, scale: 1 }}
+                        transition={{ delay: index * 0.05 }}
+                      >
+                        <LobsterCard lobster={lobster} />
+                      </motion.div>
+                      {!isUnassigned && onMoveToCave && (
+                        <div className="flex gap-1 flex-wrap">
+                          <button
+                            type="button"
+                            onClick={() => onMoveToCave(lobster.id, null)}
+                            className="px-2 py-1 border-2 border-pixel-black font-pixel text-xs font-bold bg-pixel-white text-pixel-black hover:bg-pixel-yellow transition-colors"
+                            style={{ boxShadow: '2px 2px 0 #101010' }}
+                          >
+                            移出窝
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-center py-8">
+                  <p className="font-pixel text-pixel-black/50 text-sm">这个窝里还没有龙虾</p>
+                  <Link href="/market" className="mt-3 inline-block">
+                    <PixelButton variant="primary" size="sm">去市场领养</PixelButton>
+                  </Link>
+                </div>
+              )}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </motion.div>
+  );
+}
+
+export default function MyDenPage() {
+  const { lobsters, caves, addCave, removeCave, moveLobsterToCave } = useStore();
+  const [showCreateDialog, setShowCreateDialog] = useState(false);
+  const [addTargetCaveId, setAddTargetCaveId] = useState<string | null>(null);
+  const [newCaveName, setNewCaveName] = useState('');
+  const [newCaveColor, setNewCaveColor] = useState(CAVE_COLORS[0]);
+
+  const handleCreateCave = () => {
+    if (!newCaveName.trim()) return;
+    addCave({
+      id: `cave-${Date.now()}`,
+      name: newCaveName.trim(),
+      color: newCaveColor,
+      createdAt: new Date().toISOString(),
+    });
+    setNewCaveName('');
+    setNewCaveColor(CAVE_COLORS[0]);
+    setShowCreateDialog(false);
+  };
+
+  const handleDeleteCave = (caveId: string) => {
+    removeCave(caveId);
+  };
+
+  const handleMoveToCave = (lobsterId: string, caveId: string | null) => {
+    moveLobsterToCave(lobsterId, caveId);
+  };
+
+  useEffect(() => {
+    if (addTargetCaveId != null && !caves.some((c) => c.id === addTargetCaveId)) {
+      setAddTargetCaveId(null);
+    }
+  }, [addTargetCaveId, caves]);
+
+  // Group lobsters by cave
+  const lobstersByCave: Record<string, Lobster[]> = {};
+  const unassigned: Lobster[] = [];
+  for (const l of lobsters) {
+    if (l.caveId) {
+      if (!lobstersByCave[l.caveId]) lobstersByCave[l.caveId] = [];
+      lobstersByCave[l.caveId].push(l);
+    } else {
+      unassigned.push(l);
+    }
+  }
+
+  const addTargetCave = addTargetCaveId ? caves.find((c) => c.id === addTargetCaveId) : undefined;
+  const addCandidates =
+    addTargetCaveId != null
+      ? lobsters.filter((l) => l.caveId !== addTargetCaveId)
+      : [];
+  const addUnassigned = addCandidates.filter((l) => !l.caveId);
+  const addFromOtherCaves: { cave: Cave; list: Lobster[] }[] = [];
+  if (addTargetCaveId != null) {
+    for (const c of caves) {
+      if (c.id === addTargetCaveId) continue;
+      const list = addCandidates.filter((l) => l.caveId === c.id);
+      if (list.length) addFromOtherCaves.push({ cave: c, list });
+    }
+  }
+
+  return (
+    <div className="max-w-6xl mx-auto px-4 pb-16">
+      <BackButton href="/" />
+
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="text-center mb-8 pt-6"
+      >
+        <h1 className="chinese-large text-pixel-black mb-2">我的龙虾窝</h1>
+        <p className="font-pixel text-xl text-pixel-blue">MY LOBSTER DEN</p>
+        <p className="font-pixel text-sm text-pixel-black/60 mt-2">
+          {lobsters.length} 只龙虾 · {caves.length} 个窝
+        </p>
+      </motion.div>
+
+      {/* Stats Bar */}
+      <motion.div
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={{ delay: 0.2 }}
+        className="flex justify-center gap-6 mb-8 flex-wrap"
+      >
+        <div className="bg-pixel-white border-4 border-pixel-black px-6 py-3" style={{ boxShadow: '4px 4px 0px 0px #101010' }}>
+          <p className="font-pixel text-xs text-pixel-black/60">总计</p>
+          <p className="font-pixel text-2xl text-pixel-black">{lobsters.length}</p>
+        </div>
+        <div className="bg-pixel-green border-4 border-pixel-black px-6 py-3" style={{ boxShadow: '4px 4px 0px 0px #101010' }}>
+          <p className="font-pixel text-xs text-pixel-white">空闲</p>
+          <p className="font-pixel text-2xl text-pixel-white">
+            {lobsters.filter((l: Lobster) => l.status === 'idle').length}
+          </p>
+        </div>
+        <div className="bg-pixel-yellow border-4 border-pixel-black px-6 py-3" style={{ boxShadow: '4px 4px 0px 0px #101010' }}>
+          <p className="font-pixel text-xs text-pixel-black">工作中</p>
+          <p className="font-pixel text-2xl text-pixel-black">
+            {lobsters.filter((l: Lobster) => l.status === 'working').length}
+          </p>
+        </div>
+        <div className="bg-pixel-red border-4 border-pixel-black px-6 py-3" style={{ boxShadow: '4px 4px 0px 0px #101010' }}>
+          <p className="font-pixel text-xs text-pixel-white">忙碌</p>
+          <p className="font-pixel text-2xl text-pixel-white">
+            {lobsters.filter((l: Lobster) => l.status === 'busy').length}
+          </p>
+        </div>
+      </motion.div>
+
+      {/* Create Cave Button */}
+      <div className="flex justify-center mb-6">
+        <PixelButton variant="primary" onClick={() => setShowCreateDialog(true)}>
+          + 创建新龙虾窝
+        </PixelButton>
+      </div>
+
+      {/* Cave Sections */}
+      {caves.length === 0 && lobsters.length === 0 ? (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          className="text-center py-16"
+        >
+          <div className="text-6xl mb-4">🦞</div>
+          <h2 className="chinese-large text-pixel-black mb-4">暂无龙虾窝</h2>
+          <p className="font-pixel text-pixel-black/60 mb-6">先去创建一个龙虾窝吧！</p>
+          <PixelButton variant="primary" onClick={() => setShowCreateDialog(true)}>
+            创建第一个窝
+          </PixelButton>
+        </motion.div>
+      ) : (
+        <div>
+          {/* Caves with lobsters */}
+          {caves.map((cave) => (
+            <CaveSection
+              key={cave.id}
+              cave={cave}
+              lobsters={lobstersByCave[cave.id] ?? []}
+              onDeleteCave={handleDeleteCave}
+              onOpenAddLobster={(id) => setAddTargetCaveId(id)}
+              onMoveToCave={handleMoveToCave}
+            />
+          ))}
+
+          {/* Unassigned lobsters */}
+          {unassigned.length > 0 && (
+            <CaveSection
+              cave={{ id: '__unassigned__', name: '暂无归属', color: '#6b7280', createdAt: '' }}
+              lobsters={unassigned}
+              onDeleteCave={() => {}}
+            />
+          )}
+        </div>
+      )}
+
+      {/* 向指定窝添加龙虾：可选暂无归属或其他窝的龙虾 */}
+      <AnimatePresence>
+        {addTargetCaveId != null && addTargetCave && (
+          <motion.div
+            key={addTargetCaveId}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+            onClick={() => setAddTargetCaveId(null)}
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 20 }}
+              transition={{ type: 'spring', stiffness: 300, damping: 25 }}
+              className="w-full max-w-lg max-h-[85vh] flex flex-col bg-pixel-white border-4 border-pixel-black overflow-hidden"
+              style={{ boxShadow: '8px 8px 0px 0px #101010' }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div
+                className="text-pixel-white font-pixel text-lg p-4 border-b-4 border-pixel-black flex justify-between items-center gap-2 shrink-0"
+                style={{ background: addTargetCave.color }}
+              >
+                <span className="leading-tight">
+                  向「{addTargetCave.name}」添加龙虾
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setAddTargetCaveId(null)}
+                  className="w-8 h-8 shrink-0 bg-pixel-red text-pixel-white border-2 border-pixel-black flex items-center justify-center hover:bg-pixel-orange font-pixel text-sm"
+                  style={{ boxShadow: '2px 2px 0px 0px #101010' }}
+                >
+                  X
+                </button>
+              </div>
+
+              <div className="p-4 overflow-y-auto flex-1 min-h-0 space-y-6">
+                {addCandidates.length === 0 ? (
+                  <p className="font-pixel text-sm text-pixel-black/60 text-center py-6">
+                    没有可移入的龙虾：其它窝和暂无归属里都没有龙虾，或已全部在本窝。
+                  </p>
+                ) : (
+                  <>
+                    {addUnassigned.length > 0 && (
+                      <div>
+                        <h3 className="font-pixel text-sm text-pixel-black font-bold mb-2 border-b-2 border-pixel-black pb-1">
+                          暂无归属
+                        </h3>
+                        <ul className="space-y-2">
+                          {addUnassigned.map((l) => (
+                            <li
+                              key={l.id}
+                              className="flex items-center gap-3 border-2 border-pixel-black p-2 bg-pixel-white"
+                              style={{ boxShadow: '3px 3px 0 #101010' }}
+                            >
+                              <LobsterSprite lobster={l} size="sm" showStatus={false} />
+                              <div className="flex-1 min-w-0">
+                                <p className="font-pixel text-sm text-pixel-black font-bold truncate">{l.name}</p>
+                                <p className="font-pixel text-xs text-pixel-black/60 truncate">{l.role}</p>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => moveLobsterToCave(l.id, addTargetCave.id)}
+                                className="px-2 py-1 shrink-0 bg-pixel-green text-pixel-white border-2 border-pixel-black font-pixel text-xs font-bold hover:brightness-95"
+                                style={{ boxShadow: '2px 2px 0 #101010' }}
+                              >
+                                放入此窝
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    {addFromOtherCaves.map(({ cave: srcCave, list }) => (
+                      <div key={srcCave.id}>
+                        <h3 className="font-pixel text-sm text-pixel-black font-bold mb-2 border-b-2 border-pixel-black pb-1">
+                          来自：{srcCave.name}
+                        </h3>
+                        <ul className="space-y-2">
+                          {list.map((l) => (
+                            <li
+                              key={l.id}
+                              className="flex items-center gap-3 border-2 border-pixel-black p-2 bg-pixel-white"
+                              style={{ boxShadow: '3px 3px 0 #101010' }}
+                            >
+                              <LobsterSprite lobster={l} size="sm" showStatus={false} />
+                              <div className="flex-1 min-w-0">
+                                <p className="font-pixel text-sm text-pixel-black font-bold truncate">{l.name}</p>
+                                <p className="font-pixel text-xs text-pixel-black/60 truncate">{l.role}</p>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => moveLobsterToCave(l.id, addTargetCave.id)}
+                                className="px-2 py-1 shrink-0 bg-pixel-green text-pixel-white border-2 border-pixel-black font-pixel text-xs font-bold hover:brightness-95"
+                                style={{ boxShadow: '2px 2px 0 #101010' }}
+                              >
+                                放入此窝
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    ))}
+                  </>
+                )}
+              </div>
+
+              <div className="p-3 border-t-4 border-pixel-black shrink-0">
+                <PixelButton variant="secondary" className="w-full" onClick={() => setAddTargetCaveId(null)}>
+                  关闭
+                </PixelButton>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Create Cave Dialog */}
+      <AnimatePresence>
+        {showCreateDialog && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+            onClick={() => setShowCreateDialog(false)}
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 20 }}
+              transition={{ type: 'spring', stiffness: 300, damping: 25 }}
+              className="w-[400px] bg-pixel-white border-4 border-pixel-black overflow-hidden"
+              style={{ boxShadow: '8px 8px 0px 0px #101010' }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="bg-pixel-blue text-pixel-white font-pixel text-xl p-4 border-b-4 border-pixel-black flex justify-between items-center">
+                <span>创建龙虾窝</span>
+                <button
+                  onClick={() => setShowCreateDialog(false)}
+                  className="w-8 h-8 bg-pixel-red text-pixel-white border-2 border-pixel-black flex items-center justify-center hover:bg-pixel-orange"
+                  style={{ boxShadow: '2px 2px 0px 0px #101010' }}
+                >
+                  X
+                </button>
+              </div>
+
+              <div className="p-6 space-y-4">
+                <div>
+                  <label className="font-pixel text-sm text-pixel-black block mb-2">窝名称</label>
+                  <input
+                    type="text"
+                    value={newCaveName}
+                    onChange={(e) => setNewCaveName(e.target.value)}
+                    placeholder="例如：研究小队、写作组..."
+                    className="w-full bg-pixel-white border-4 border-pixel-black font-pixel text-pixel-black px-4 py-2 focus:outline-none focus:border-pixel-blue"
+                    style={{ boxShadow: '3px 3px 0px 0px #101010' }}
+                  />
+                </div>
+
+                <div>
+                  <label className="font-pixel text-sm text-pixel-black block mb-2">窝颜色</label>
+                  <div className="flex gap-2 flex-wrap">
+                    {CAVE_COLORS.map((color) => (
+                      <button
+                        key={color}
+                        onClick={() => setNewCaveColor(color)}
+                        className={`w-10 h-10 rounded-full border-4 border-pixel-black transition-transform ${newCaveColor === color ? 'scale-110' : ''}`}
+                        style={{ background: color, boxShadow: '2px 2px 0px 0px #101010' }}
+                      />
+                    ))}
+                  </div>
+                </div>
+
+                <div className="pt-2">
+                  <div
+                    className="border-4 border-pixel-black p-3 font-pixel text-center text-white font-bold"
+                    style={{ background: newCaveColor, boxShadow: '3px 3px 0px 0px #101010' }}
+                  >
+                    {newCaveName || '窝名称预览'}
+                  </div>
+                </div>
+              </div>
+
+              <div className="p-4 border-t-4 border-pixel-black flex gap-3">
+                <PixelButton variant="secondary" onClick={() => setShowCreateDialog(false)} className="flex-1">
+                  取消
+                </PixelButton>
+                <PixelButton variant="primary" onClick={handleCreateCave} className="flex-1" disabled={!newCaveName.trim()}>
+                  创建
+                </PixelButton>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}

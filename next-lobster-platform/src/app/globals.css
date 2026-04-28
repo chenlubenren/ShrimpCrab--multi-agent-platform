@@ -1,0 +1,130 @@
+@import url('https://fonts.googleapis.com/css2?family=VT323&family=ZCOOL+KuaiLe&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --pixel-black: #101010;
+  --pixel-white: #F8F8F8;
+  --pixel-gray: #6B6B6B;
+  --pixel-blue: #3A5BA0;
+  --pixel-green: #2D7D46;
+  --pixel-yellow: #D4A533;
+  --pixel-red: #A83232;
+}
+
+* {
+  image-rendering: pixelated;
+}
+
+body {
+  font-family: 'VT323', monospace;
+  font-size: 20px;
+  line-height: 1.4;
+  background-color: #E8E8E8;
+  color: #101010;
+  overflow-x: hidden;
+}
+
+/* Pixel font base class */
+.font-pixel {
+  font-family: 'VT323', monospace;
+  letter-spacing: 0.5px;
+}
+
+/* Chinese pixel font - larger for readability */
+.font-chinese {
+  font-family: 'ZCOOL KuaiLe', cursive;
+}
+
+/* Chinese font larger */
+.chinese-large {
+  font-family: 'ZCOOL KuaiLe', cursive;
+  font-size: 1.8em;
+  letter-spacing: 2px;
+}
+
+/* Text sizes - pixel font optimized */
+.text-xs { font-size: 14px !important; }
+.text-sm { font-size: 16px !important; }
+.text-base { font-size: 18px !important; }
+.text-lg { font-size: 20px !important; }
+.text-xl { font-size: 24px !important; }
+.text-2xl { font-size: 28px !important; }
+.text-3xl { font-size: 32px !important; }
+.text-4xl { font-size: 40px !important; }
+
+/* Clean Background Pattern */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background-color: #E8E8E8;
+  z-index: -1;
+}
+
+/* RPG Dialog Box Style */
+.rpg-dialog {
+  background: #F8F8F8;
+  border: 4px solid #101010;
+  box-shadow: 
+    inset 0 0 0 2px #F8F8F8,
+    0 0 0 4px #101010,
+    8px 8px 0 0 #101010;
+}
+
+/* Selection Color */
+::selection {
+  background-color: #3A5BA0;
+  color: #F8F8F8;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 14px;
+}
+
+::-webkit-scrollbar-track {
+  background: #D8D8D8;
+  border: 2px solid #101010;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #6B6B6B;
+  border: 2px solid #101010;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #3A5BA0;
+}
+
+/* Focus States */
+*:focus {
+  outline: 3px solid #3A5BA0;
+  outline-offset: 2px;
+}
+
+/* Header */
+header {
+  background-color: #101010 !important;
+  border-bottom: 4px solid #A83232 !important;
+}
+
+header h1 {
+  color: #A83232 !important;
+}
+
+header span {
+  color: #D4A533 !important;
+}
+
+/* Footer */
+footer {
+  background-color: #101010 !important;
+  border-top: 4px solid #A83232 !important;
+}
+
+footer p {
+  color: #F8F8F8 !important;
+}
