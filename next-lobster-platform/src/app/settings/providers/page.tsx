@@ -1,149 +1,206 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
-import Link from 'next/link';
 import { BackButton } from '@/components/ui/BackButton';
 import { PixelButton } from '@/components/ui/PixelButton';
 import { useAuthStore } from '@/store/useAuthStore';
+import { fetchRuntimeHealth } from '@/lib/api';
+import type { RuntimeHealth } from '@/types';
+import {
+  PROVIDER_TYPES,
+  findPresetForProvider,
+  getModelDisplayName,
+  getPresetByKey,
+  getPresetsForType,
+  getProviderTypeLabel,
+  normalizeProviderModels,
+  type ProviderPreset,
+  type ProviderType,
+} from '@/lib/providerPresets';
 
 const API_BASE = 'http://localhost:3002';
-
-interface ProviderModel {
-  id: string;
-  name: string;
-}
 
 interface Provider {
   id: string;
   name: string;
-  type: string;
+  type: ProviderType;
   apiKey: string;
-  baseUrl?: string;
-  models: ProviderModel[];
+  baseUrl?: string | null;
+  models: unknown[];
   isDefault: boolean;
 }
 
-const TABS = [
-  { key: 'claude', label: 'Claude', icon: '🧠' },
-  { key: 'codex', label: 'Codex', icon: '💻' },
-  { key: 'opencode', label: 'OpenCode', icon: '🔧' },
-  { key: 'openclaw', label: 'OpenClaw', icon: '🦞' },
-  { key: 'hermes', label: 'Hermes', icon: '🛡️' },
-];
+function parseModels(raw: unknown): unknown[] {
+  if (Array.isArray(raw)) return raw;
+  if (typeof raw !== 'string') return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
 
-const DEFAULT_MODELS: Record<string, ProviderModel[]> = {
-  claude: [
-    { id: 'claude-opus-4-7', name: 'Claude Opus 4.7' },
-    { id: 'claude-sonnet-4-7', name: 'Claude Sonnet 4.7' },
-    { id: 'claude-haiku-4-7', name: 'Claude Haiku 4.7' },
-    { id: 'claude-3-5-sonnet-20250514', name: 'Claude 3.5 Sonnet (Latest)' },
-    { id: 'claude-3-5-haiku-20250514', name: 'Claude 3.5 Haiku (Latest)' },
-  ],
-  codex: [
-    // GPT-5 系列 (2026年最新)
-    { id: 'gpt-5.5', name: 'GPT-5.5' },
-    { id: 'gpt-5.5-pro', name: 'GPT-5.5 Pro' },
-    { id: 'gpt-5.4', name: 'GPT-5.4' },
-    { id: 'gpt-5.4-pro', name: 'GPT-5.4 Pro' },
-    { id: 'gpt-5.4-mini', name: 'GPT-5.4 Mini' },
-    { id: 'gpt-5.4-nano', name: 'GPT-5.4 Nano' },
-    // GPT-5 Thinking 系列
-    { id: 'gpt-5-thinking', name: 'GPT-5 Thinking' },
-    { id: 'gpt-5-thinking-pro', name: 'GPT-5 Thinking Pro' },
-    { id: 'gpt-5-thinking-mini', name: 'GPT-5 Thinking Mini' },
-    // o 系列
-    { id: 'o3', name: 'o3' },
-    { id: 'o3-pro', name: 'o3 Pro' },
-    { id: 'o4-mini', name: 'o4 Mini' },
-    { id: 'o4-mini-high', name: 'o4 Mini High' },
-    // GPT-4o
-    { id: 'gpt-4o', name: 'GPT-4o' },
-  ],
-  opencode: [
-    // DeepSeek V4 系列 (2026年4月最新)
-    { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro' },
-    { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash' },
-    { id: 'deepseek-chat', name: 'DeepSeek Chat (兼容)' },
-    { id: 'deepseek-reasoner', name: 'DeepSeek Reasoner (兼容)' },
-    // Kimi K2 系列 (2026年4月最新)
-    { id: 'kimi-k2.6', name: 'Kimi K2.6' },
-    { id: 'kimi-k2.5', name: 'Kimi K2.5' },
-    { id: 'moonshot-v1-128k', name: 'Kimi V1 128K' },
-    // GLM-5 系列 (2026年4月最新)
-    { id: 'glm-5.1', name: 'GLM-5.1' },
-    { id: 'glm-5', name: 'GLM-5' },
-    { id: 'glm-4.7', name: 'GLM-4.7' },
-    { id: 'glm-4.6', name: 'GLM-4.6' },
-    // Qwen3.6 系列 (2026年4月最新)
-    { id: 'qwen3.6-27b', name: 'Qwen3.6 27B' },
-    { id: 'qwen3.6-35b-a3b', name: 'Qwen3.6 35B' },
-    { id: 'qwen3.5-397b-a17b', name: 'Qwen3.5 397B' },
-    { id: 'qwen2.5-72b', name: 'Qwen2.5 72B' },
-    // 百川
-    { id: 'baichuan4', name: '百川4' },
-    { id: 'baichuan3-turbo', name: '百川3 Turbo' },
-    // Yi
-    { id: 'yi-large', name: 'Yi Large' },
-    { id: 'yi-medium', name: 'Yi Medium' },
-  ],
-  openclaw: [
-    { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro' },
-    { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash' },
-    { id: 'glm-5.1', name: 'GLM-5.1' },
-    { id: 'kimi-k2.6', name: 'Kimi K2.6' },
-    { id: 'qwen3.6-27b', name: 'Qwen3.6 27B' },
-    { id: 'gpt-5.4', name: 'GPT-5.4' },
-    { id: 'claude-3-5-sonnet', name: 'Claude 3.5 Sonnet' },
-  ],
-  hermes: [
-    { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro' },
-    { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash' },
-    { id: 'glm-5.1', name: 'GLM-5.1' },
-    { id: 'kimi-k2.6', name: 'Kimi K2.6' },
-    { id: 'qwen3.6-27b', name: 'Qwen3.6 27B' },
-    { id: 'gpt-5.4', name: 'GPT-5.4' },
-    { id: 'claude-3-5-sonnet', name: 'Claude 3.5 Sonnet' },
-  ],
-};
+function maskKey(apiKey: string): string {
+  if (!apiKey) return 'not set';
+  if (apiKey.length <= 12) return `${apiKey.slice(0, 4)}...`;
+  return `${apiKey.slice(0, 8)}...${apiKey.slice(-4)}`;
+}
 
-const PROVIDER_INFO: Record<string, { url: string; keyField: string; hint: string }> = {
-  claude: {
-    url: 'https://console.anthropic.com/settings/keys',
-    keyField: 'ANTHROPIC_API_KEY',
-    hint: '从 Anthropic Console 获取 API Key',
-  },
-  codex: {
-    url: 'https://platform.openai.com/api-keys',
-    keyField: 'OPENAI_API_KEY',
-    hint: 'GitHub Copilot 使用此 Key',
-  },
-  opencode: {
-    url: 'https://platform.openai.com/api-keys',
-    keyField: 'OPENAI_API_KEY',
-    hint: 'OpenAI 或兼容 API Key',
-  },
-  openclaw: {
-    url: '',
-    keyField: 'OPENCLAW_API_KEY',
-    hint: 'OpenClaw 兼容 API Key',
-  },
-  hermes: {
-    url: '',
-    keyField: 'HERMES_API_KEY',
-    hint: 'Hermes Agent API Key',
-  },
-};
+function getEquivalentPreset(provider: Provider, targetType: ProviderType): ProviderPreset | undefined {
+  const sourcePreset = findPresetForProvider(provider.type, provider.baseUrl, provider.models);
+  const presetSuffix = sourcePreset?.key.split(':')[1];
+  return presetSuffix ? getPresetByKey(`${targetType}:${presetSuffix}`) : undefined;
+}
+
+function buildCopiedProvider(provider: Provider, targetType: ProviderType) {
+  const targetPreset = getEquivalentPreset(provider, targetType);
+  const copiedModels = targetPreset?.models.length
+    ? targetPreset.models.map((model) => model.id)
+    : normalizeProviderModels(provider.models);
+
+  return {
+    name: `${provider.name} (${getProviderTypeLabel(targetType)})`,
+    type: targetType,
+    apiKey: provider.apiKey,
+    baseUrl: targetPreset?.baseUrl ?? provider.baseUrl ?? undefined,
+    models: copiedModels,
+  };
+}
+
+function RuntimeHealthPanel({
+  health,
+  loading,
+  error,
+  onRefresh,
+}: {
+  health: RuntimeHealth | null;
+  loading: boolean;
+  error: string;
+  onRefresh: () => void;
+}) {
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0, transition: { delay: 0.12 } }}
+      className="mb-6 border-4 border-pixel-black bg-pixel-white p-4"
+      style={{ boxShadow: '6px 6px 0 #101010' }}
+    >
+      <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h2 className="font-pixel text-lg text-pixel-black">运行时预检</h2>
+          <p className="mt-1 font-pixel text-xs text-pixel-black/55">
+            提前检查本机 CLI 与供应商配置，避免单聊、茶话会或团队执行时才发现 spawn/超时问题。
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={onRefresh}
+          className="border-2 border-pixel-black bg-pixel-blue px-3 py-2 font-pixel text-xs text-pixel-white"
+          style={{ boxShadow: '2px 2px 0 #101010' }}
+        >
+          {loading ? '检查中...' : '重新检查'}
+        </button>
+      </div>
+
+      {error && (
+        <div className="mb-3 border-4 border-pixel-red bg-pixel-red/10 px-3 py-2 font-pixel text-xs text-pixel-red">
+          {error}
+        </div>
+      )}
+
+      {health ? (
+        <>
+          <div className="mb-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+            <div className="border-2 border-pixel-black bg-pixel-green px-3 py-2 text-pixel-white">
+              <p className="font-pixel text-xs">可运行</p>
+              <p className="font-pixel text-2xl leading-none">{health.summary.ready}/{health.summary.total}</p>
+            </div>
+            <div className="border-2 border-pixel-black bg-pixel-red px-3 py-2 text-pixel-white">
+              <p className="font-pixel text-xs">缺 CLI</p>
+              <p className="font-pixel text-2xl leading-none">{health.summary.missingCli}</p>
+            </div>
+            <div className="border-2 border-pixel-black bg-pixel-yellow px-3 py-2 text-pixel-black">
+              <p className="font-pixel text-xs">缺供应商</p>
+              <p className="font-pixel text-2xl leading-none">{health.summary.missingProvider}</p>
+            </div>
+            <div className="border-2 border-pixel-black bg-pixel-gray px-3 py-2 text-pixel-white">
+              <p className="font-pixel text-xs">检查时间</p>
+              <p className="truncate font-pixel text-xs">{new Date(health.checkedAt).toLocaleTimeString()}</p>
+            </div>
+          </div>
+
+          <div className="grid gap-2 md:grid-cols-2">
+            {health.platforms.map((item) => (
+              <div
+                key={item.platform}
+                className="border-2 border-pixel-black bg-pixel-cream p-3"
+                style={{ boxShadow: '3px 3px 0 #101010' }}
+              >
+                <div className="mb-2 flex items-center justify-between gap-3">
+                  <span className="font-pixel text-sm font-bold text-pixel-black">{item.label}</span>
+                  <span
+                    className={`border-2 border-pixel-black px-2 py-0.5 font-pixel text-[10px] ${
+                      item.ready ? 'bg-pixel-green text-pixel-white' : 'bg-pixel-red text-pixel-white'
+                    }`}
+                  >
+                    {item.ready ? 'READY' : 'CHECK'}
+                  </span>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <span className={`border-2 border-pixel-black px-2 py-1 font-pixel text-xs ${item.cli.available ? 'bg-pixel-green text-pixel-white' : 'bg-pixel-gray text-pixel-white'}`}>
+                    CLI {item.cli.available ? 'OK' : '缺失'}
+                  </span>
+                  <span className={`border-2 border-pixel-black px-2 py-1 font-pixel text-xs ${item.provider.configuredCount > 0 || item.provider.envConfigured ? 'bg-pixel-green text-pixel-white' : 'bg-pixel-gray text-pixel-white'}`}>
+                    供应商 {item.provider.configuredCount || (item.provider.envConfigured ? 'ENV' : 0)}
+                  </span>
+                </div>
+                {item.cli.version && (
+                  <p className="mt-2 truncate font-mono text-[11px] text-pixel-black/45">{item.cli.version}</p>
+                )}
+                <div className="mt-2 space-y-1 border-t-2 border-pixel-black/10 pt-2">
+                  <p className="truncate font-mono text-[11px] text-pixel-black/45" title={item.cli.displayCommand}>
+                    {item.cli.displayCommand}
+                  </p>
+                  {item.cli.usesWsl && (
+                    <p className="font-pixel text-[10px] text-pixel-black/50">通过 WSL 检查 Linux 侧 CLI</p>
+                  )}
+                  {!item.cli.available && (item.cli.errorCode || item.cli.errorName || item.cli.errorMessage || item.cli.stderr) && (
+                    <p className="font-mono text-[11px] leading-snug text-pixel-red">
+                      {[item.cli.errorCode, item.cli.errorName].filter(Boolean).join(' · ')}
+                      {(item.cli.errorCode || item.cli.errorName) && (item.cli.errorMessage || item.cli.stderr) ? '：' : ''}
+                      {item.cli.stderr || item.cli.errorMessage}
+                    </p>
+                  )}
+                </div>
+                {item.issues.length > 0 && (
+                  <p className="mt-2 font-pixel text-xs leading-snug text-pixel-black/65">
+                    {item.issues[0]} {item.installHint}
+                  </p>
+                )}
+              </div>
+            ))}
+          </div>
+        </>
+      ) : (
+        <div className="border-2 border-pixel-black bg-pixel-black/5 px-3 py-6 text-center font-pixel text-sm text-pixel-black/50">
+          {loading ? '正在检查运行时...' : '暂无预检结果'}
+        </div>
+      )}
+    </motion.div>
+  );
+}
 
 export default function ProviderSettingsPage() {
   const { token } = useAuthStore();
-  const [activeTab, setActiveTab] = useState('claude');
+  const [activeTab, setActiveTab] = useState<ProviderType>('claude');
   const [providers, setProviders] = useState<Provider[]>([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [editingProvider, setEditingProvider] = useState<Provider | null>(null);
 
-  // Form state
+  const [selectedPresetKey, setSelectedPresetKey] = useState('');
   const [formName, setFormName] = useState('');
   const [formApiKey, setFormApiKey] = useState('');
   const [formBaseUrl, setFormBaseUrl] = useState('');
@@ -151,10 +208,36 @@ export default function ProviderSettingsPage() {
   const [customModel, setCustomModel] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [copyProvider, setCopyProvider] = useState<Provider | null>(null);
+  const [copyTargetTypes, setCopyTargetTypes] = useState<ProviderType[]>([]);
+  const [copying, setCopying] = useState(false);
+  const [copyError, setCopyError] = useState('');
+  const [runtimeHealth, setRuntimeHealth] = useState<RuntimeHealth | null>(null);
+  const [runtimeLoading, setRuntimeLoading] = useState(true);
+  const [runtimeError, setRuntimeError] = useState('');
+
+  const tabPresets = useMemo(() => getPresetsForType(activeTab), [activeTab]);
+  const selectedPreset = getPresetByKey(selectedPresetKey) || tabPresets[0];
+  const baseUrlEditable = Boolean(selectedPreset?.isCustom);
+  const presetModelIds = new Set((selectedPreset?.models || []).map((model) => model.id));
+  const tabProviders = providers.filter((provider) => provider.type === activeTab);
 
   useEffect(() => {
     fetchProviders();
+    void refreshRuntimeHealth();
   }, []);
+
+  const refreshRuntimeHealth = async () => {
+    setRuntimeLoading(true);
+    setRuntimeError('');
+    try {
+      setRuntimeHealth(await fetchRuntimeHealth());
+    } catch (error) {
+      setRuntimeError(error instanceof Error ? error.message : '运行时预检失败');
+    } finally {
+      setRuntimeLoading(false);
+    }
+  };
 
   const fetchProviders = async () => {
     setLoading(true);
@@ -164,9 +247,9 @@ export default function ProviderSettingsPage() {
       });
       if (res.ok) {
         const data = await res.json();
-        setProviders(data.providers.map((p: any) => ({
-          ...p,
-          models: JSON.parse(p.models || '[]'),
+        setProviders((data.providers || []).map((provider: any) => ({
+          ...provider,
+          models: parseModels(provider.models),
         })));
       }
     } finally {
@@ -174,68 +257,82 @@ export default function ProviderSettingsPage() {
     }
   };
 
-  const tabProviders = providers.filter(p => p.type === activeTab);
+  const applyPreset = (preset: ProviderPreset, keepName = false) => {
+    setSelectedPresetKey(preset.key);
+    setFormBaseUrl(preset.baseUrl || '');
+    setFormModels(preset.models.map((model) => model.id));
+    if (!keepName) setFormName(preset.label);
+    setError('');
+  };
 
   const openAddForm = () => {
+    const firstPreset = getPresetsForType(activeTab)[0];
     setEditingProvider(null);
-    setFormName('');
     setFormApiKey('');
-    setFormBaseUrl('');
-    setFormModels([]);
     setCustomModel('');
-    setError('');
+    if (firstPreset) {
+      applyPreset(firstPreset);
+    } else {
+      setSelectedPresetKey('');
+      setFormName('');
+      setFormBaseUrl('');
+      setFormModels([]);
+    }
     setShowForm(true);
   };
 
-  const openEditForm = (p: Provider) => {
-    setEditingProvider(p);
-    setFormName(p.name);
-    setFormApiKey(p.apiKey);
-    setFormBaseUrl(p.baseUrl || '');
-    setFormModels(p.models.map((m: any) => m.id || m));
+  const openEditForm = (provider: Provider) => {
+    const preset = findPresetForProvider(provider.type, provider.baseUrl, provider.models);
+    setEditingProvider(provider);
+    setSelectedPresetKey(preset?.key || '');
+    setFormName(provider.name);
+    setFormApiKey(provider.apiKey);
+    setFormBaseUrl(provider.baseUrl || preset?.baseUrl || '');
+    setFormModels(normalizeProviderModels(provider.models));
     setCustomModel('');
     setError('');
     setShowForm(true);
   };
 
   const toggleModel = (modelId: string) => {
-    setFormModels(prev =>
-      prev.includes(modelId) ? prev.filter(m => m !== modelId) : [...prev, modelId]
+    setFormModels((prev) =>
+      prev.includes(modelId) ? prev.filter((item) => item !== modelId) : [...prev, modelId]
     );
   };
 
   const addCustomModel = () => {
     const trimmed = customModel.trim();
     if (trimmed && !formModels.includes(trimmed)) {
-      setFormModels(prev => [...prev, trimmed]);
+      setFormModels((prev) => [...prev, trimmed]);
       setCustomModel('');
     }
   };
 
-  const removeCustomModel = (modelId: string) => {
-    const defaultIds = DEFAULT_MODELS[activeTab]?.map(m => m.id) || [];
-    if (!defaultIds.includes(modelId)) {
-      setFormModels(prev => prev.filter(m => m !== modelId));
-    }
+  const removeModel = (modelId: string) => {
+    setFormModels((prev) => prev.filter((item) => item !== modelId));
   };
 
   const handleSave = async () => {
     if (!formName.trim() || !formApiKey.trim()) {
-      setError('请填写名称和 API Key');
+      setError('请填写供应商名称和 API Key');
       return;
     }
     if (formModels.length === 0) {
-      setError('请至少选择一个模型');
+      setError('请至少选择或添加一个模型');
       return;
     }
+
     setSaving(true);
     setError('');
     try {
+      const effectiveBaseUrl = baseUrlEditable
+        ? formBaseUrl.trim()
+        : (selectedPreset?.baseUrl || formBaseUrl).trim();
       const body = {
         name: formName.trim(),
-        type: activeTab,
+        type: editingProvider?.type || activeTab,
         apiKey: formApiKey.trim(),
-        baseUrl: formBaseUrl.trim() || undefined,
+        baseUrl: effectiveBaseUrl || undefined,
         models: formModels,
       };
       const res = await fetch(
@@ -249,9 +346,23 @@ export default function ProviderSettingsPage() {
           body: JSON.stringify(body),
         }
       );
-      if (!res.ok) throw new Error('保存失败');
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(data?.message || '保存失败');
+      if (data?.provider) {
+        const savedProvider = {
+          ...data.provider,
+          models: parseModels(data.provider.models),
+        };
+        setProviders((prev) => {
+          const exists = prev.some((provider) => provider.id === savedProvider.id);
+          return exists
+            ? prev.map((provider) => (provider.id === savedProvider.id ? savedProvider : provider))
+            : [savedProvider, ...prev];
+        });
+      }
+      await fetchProviders();
+      setEditingProvider(null);
       setShowForm(false);
-      fetchProviders();
     } catch (e) {
       setError(e instanceof Error ? e.message : '保存失败');
     } finally {
@@ -268,59 +379,111 @@ export default function ProviderSettingsPage() {
     fetchProviders();
   };
 
+  const openCopyForm = (provider: Provider) => {
+    setCopyProvider(provider);
+    setCopyTargetTypes([]);
+    setCopyError('');
+  };
+
+  const toggleCopyTarget = (targetType: ProviderType) => {
+    setCopyTargetTypes((prev) =>
+      prev.includes(targetType)
+        ? prev.filter((item) => item !== targetType)
+        : [...prev, targetType]
+    );
+  };
+
+  const handleCopyProvider = async () => {
+    if (!copyProvider) return;
+    if (copyTargetTypes.length === 0) {
+      setCopyError('请选择至少一个目标模型');
+      return;
+    }
+
+    setCopying(true);
+    setCopyError('');
+    try {
+      for (const targetType of copyTargetTypes) {
+        const body = buildCopiedProvider(copyProvider, targetType);
+        const res = await fetch(`${API_BASE}/api/providers`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify(body),
+        });
+        const data = await res.json().catch(() => null);
+        if (!res.ok) {
+          throw new Error(data?.message || `复制到 ${getProviderTypeLabel(targetType)} 失败`);
+        }
+      }
+      await fetchProviders();
+      setCopyProvider(null);
+      setCopyTargetTypes([]);
+    } catch (e) {
+      setCopyError(e instanceof Error ? e.message : '复制失败');
+    } finally {
+      setCopying(false);
+    }
+  };
+
   return (
-    <div className="max-w-4xl mx-auto">
+    <div className="max-w-5xl mx-auto">
       <BackButton />
 
-      {/* Page Title */}
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        className="mb-6"
-      >
-        <h1 className="font-pixel text-2xl text-pixel-black mb-2 flex items-center gap-2">
-          <span>🔑</span> 供应商配置
-        </h1>
+      <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="mb-6">
+        <h1 className="font-pixel text-2xl text-pixel-black mb-2">供应商配置</h1>
         <p className="font-pixel text-sm text-pixel-black/60">
-          配置各平台的 API Key，每个 Agent 可以从这里选择供应商
+          先选择 Agent 平台，再从常用官方供应商卡片里创建可用的 API Key、Base URL 和模型集合。
         </p>
       </motion.div>
 
-      {/* Tabs */}
+      <RuntimeHealthPanel
+        health={runtimeHealth}
+        loading={runtimeLoading}
+        error={runtimeError}
+        onRefresh={() => void refreshRuntimeHealth()}
+      />
+
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0, transition: { delay: 0.1 } }}
-        className="flex gap-1 mb-6 overflow-x-auto pb-2"
+        className="flex gap-2 mb-6 overflow-x-auto pb-2"
       >
-        {TABS.map(tab => (
+        {PROVIDER_TYPES.map((tab) => (
           <button
             key={tab.key}
-            onClick={() => { setActiveTab(tab.key); setShowForm(false); }}
-            className={`px-4 py-2 border-4 font-pixel text-sm flex items-center gap-2 whitespace-nowrap transition-colors ${
+            onClick={() => {
+              setActiveTab(tab.key);
+              setShowForm(false);
+            }}
+            className={`px-4 py-2 border-4 font-pixel text-sm whitespace-nowrap transition-colors ${
               activeTab === tab.key
                 ? 'border-pixel-black bg-pixel-yellow'
                 : 'border-pixel-black/30 bg-pixel-white hover:bg-pixel-yellow/30'
             }`}
             style={{ boxShadow: activeTab === tab.key ? '3px 3px 0 #101010' : '2px 2px 0 #101010' }}
           >
-            <span>{tab.icon}</span>
             <span>{tab.label}</span>
           </button>
         ))}
       </motion.div>
 
-      {/* Provider List */}
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0, transition: { delay: 0.2 } }}
         className="bg-pixel-white border-4 border-pixel-black p-6"
         style={{ boxShadow: '6px 6px 0 #101010' }}
       >
-        {/* Header */}
-        <div className="flex items-center justify-between mb-4">
-          <div className="font-pixel text-sm text-pixel-black/60 flex items-center gap-2">
-            <span>{TABS.find(t => t.key === activeTab)?.icon}</span>
-            <span>{TABS.find(t => t.key === activeTab)?.label} 供应商</span>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-4">
+          <div>
+            <div className="font-pixel text-sm text-pixel-black/60 flex items-center gap-2">
+              <span>{getProviderTypeLabel(activeTab)} 供应商</span>
+            </div>
+            <p className="font-pixel text-xs text-pixel-black/40 mt-1">
+              当前平台只能被对应类型的 Agent 选择，避免 Claude Code 误选 OpenClaw/Codex 配置。
+            </p>
           </div>
           <PixelButton variant="primary" size="sm" onClick={openAddForm}>
             + 新增供应商
@@ -331,72 +494,151 @@ export default function ProviderSettingsPage() {
           <div className="text-center py-8 font-pixel text-pixel-black/50">加载中...</div>
         ) : tabProviders.length === 0 ? (
           <div className="text-center py-8">
-            <div className="font-pixel text-4xl mb-3">🔑</div>
-            <p className="font-pixel text-pixel-black/50 mb-4">还没有配置 {TABS.find(t => t.key === activeTab)?.label} 供应商</p>
-            <PixelButton variant="primary" onClick={openAddForm}>+ 添加第一个供应商</PixelButton>
+            <p className="font-pixel text-pixel-black/50 mb-4">
+              还没有配置 {getProviderTypeLabel(activeTab)} 供应商
+            </p>
+            <PixelButton variant="primary" onClick={openAddForm}>添加第一个供应商</PixelButton>
           </div>
         ) : (
           <div className="space-y-3">
-            {tabProviders.map(p => (
-              <div
-                key={p.id}
-                className="border-4 border-pixel-black bg-pixel-cream p-4 flex items-start gap-4"
-                style={{ boxShadow: '4px 4px 0 #101010' }}
-              >
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="font-pixel text-base font-bold">{p.name}</span>
-                    {p.isDefault && (
-                      <span className="px-2 py-0.5 bg-pixel-green text-pixel-white font-pixel text-xs">默认</span>
-                    )}
-                  </div>
-                  <div className="font-mono text-xs text-pixel-black/50 mb-2 truncate">
-                    {p.apiKey.substring(0, 8)}...{p.apiKey.substring(p.apiKey.length - 4)}
-                  </div>
-                  {p.baseUrl && (
-                    <div className="font-mono text-xs text-pixel-black/40 mb-2 truncate">
-                      Base: {p.baseUrl}
+            {tabProviders.map((provider) => {
+              const modelIds = normalizeProviderModels(provider.models);
+              const preset = findPresetForProvider(provider.type, provider.baseUrl, provider.models);
+              return (
+                <div
+                  key={provider.id}
+                  className="border-4 border-pixel-black bg-pixel-cream p-4 flex flex-col sm:flex-row sm:items-start gap-4"
+                  style={{ boxShadow: '4px 4px 0 #101010' }}
+                >
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="font-pixel text-base font-bold">{provider.name}</span>
+                      {preset && (
+                        <span className="px-2 py-0.5 bg-pixel-black text-pixel-white font-pixel text-xs">
+                          {preset.shortLabel}
+                        </span>
+                      )}
+                      {provider.isDefault && (
+                        <span className="px-2 py-0.5 bg-pixel-green text-pixel-white font-pixel text-xs">默认</span>
+                      )}
                     </div>
-                  )}
-                  <div className="flex flex-wrap gap-1">
-                    {(p.models || []).slice(0, 5).map((m: any) => (
-                      <span
-                        key={m.id || m}
-                        className="px-2 py-0.5 bg-pixel-black/5 border border-pixel-black/20 font-mono text-xs"
-                      >
-                        {m.name || m}
-                      </span>
-                    ))}
-                    {(p.models || []).length > 5 && (
-                      <span className="px-2 py-0.5 bg-pixel-black/5 border border-pixel-black/20 font-mono text-xs">
-                        +{(p.models || []).length - 5}
-                      </span>
+                    <div className="font-mono text-xs text-pixel-black/50 mb-2 truncate">
+                      {maskKey(provider.apiKey)}
+                    </div>
+                    {provider.baseUrl && (
+                      <div className="font-mono text-xs text-pixel-black/40 mb-2 truncate">
+                        Base: {provider.baseUrl}
+                      </div>
                     )}
+                    <div className="flex flex-wrap gap-1">
+                      {modelIds.slice(0, 5).map((modelId) => (
+                        <span
+                          key={modelId}
+                          className="px-2 py-0.5 bg-pixel-black/5 border border-pixel-black/20 font-mono text-xs"
+                        >
+                          {getModelDisplayName(modelId)}
+                        </span>
+                      ))}
+                      {modelIds.length > 5 && (
+                        <span className="px-2 py-0.5 bg-pixel-black/5 border border-pixel-black/20 font-mono text-xs">
+                          +{modelIds.length - 5}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-2 shrink-0 sm:justify-end">
+                    <button
+                      onClick={() => openCopyForm(provider)}
+                      className="px-3 py-1.5 bg-pixel-blue border-2 border-pixel-black font-pixel text-xs text-pixel-white hover:bg-pixel-blue/80 transition-colors"
+                      style={{ boxShadow: '2px 2px 0 #101010' }}
+                    >
+                      复制到其他模型
+                    </button>
+                    <button
+                      onClick={() => openEditForm(provider)}
+                      className="px-3 py-1.5 bg-pixel-yellow border-2 border-pixel-black font-pixel text-xs hover:bg-pixel-yellow/80 transition-colors"
+                      style={{ boxShadow: '2px 2px 0 #101010' }}
+                    >
+                      编辑
+                    </button>
+                    <button
+                      onClick={() => handleDelete(provider.id)}
+                      className="px-3 py-1.5 bg-pixel-red border-2 border-pixel-black font-pixel text-xs text-pixel-white hover:bg-pixel-red/80 transition-colors"
+                      style={{ boxShadow: '2px 2px 0 #101010' }}
+                    >
+                      删除
+                    </button>
                   </div>
                 </div>
-                <div className="flex gap-2 shrink-0">
-                  <button
-                    onClick={() => openEditForm(p)}
-                    className="px-3 py-1.5 bg-pixel-yellow border-2 border-pixel-black font-pixel text-xs hover:bg-pixel-yellow/80 transition-colors"
-                    style={{ boxShadow: '2px 2px 0 #101010' }}
-                  >
-                    编辑
-                  </button>
-                  <button
-                    onClick={() => handleDelete(p.id)}
-                    className="px-3 py-1.5 bg-pixel-red border-2 border-pixel-black font-pixel text-xs text-pixel-white hover:bg-pixel-red/80 transition-colors"
-                    style={{ boxShadow: '2px 2px 0 #101010' }}
-                  >
-                    删除
-                  </button>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </motion.div>
 
-      {/* Add/Edit Form Modal */}
+      {copyProvider && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-pixel-black/50 p-4"
+          onClick={() => setCopyProvider(null)}
+        >
+          <motion.div
+            initial={{ scale: 0.9, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            exit={{ scale: 0.9, opacity: 0 }}
+            className="bg-pixel-white border-8 border-pixel-black w-full max-w-lg"
+            style={{ boxShadow: '8px 8px 0 #101010' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="bg-pixel-blue border-b-4 border-pixel-black px-6 py-4 flex items-center justify-between">
+              <h2 className="font-pixel text-lg text-pixel-white">复制到其他模型</h2>
+              <button
+                onClick={() => setCopyProvider(null)}
+                className="font-pixel text-pixel-white hover:text-pixel-yellow text-2xl leading-none"
+              >
+                x
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4">
+              <p className="font-pixel text-sm text-pixel-black/70">
+                将 {copyProvider.name} 的 API Key、Base URL 和模型配置复制到所选 Agent 类型。
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {PROVIDER_TYPES.filter((type) => type.key !== copyProvider.type).map((type) => (
+                  <label
+                    key={type.key}
+                    className="flex items-center gap-2 border-4 border-pixel-black/25 px-3 py-2 cursor-pointer hover:border-pixel-black"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={copyTargetTypes.includes(type.key)}
+                      onChange={() => toggleCopyTarget(type.key)}
+                      className="w-4 h-4"
+                    />
+                    <span className="font-pixel text-sm">{type.label}</span>
+                  </label>
+                ))}
+              </div>
+              {copyError && (
+                <div className="bg-pixel-red/20 border-4 border-pixel-red px-4 py-2 font-pixel text-sm text-pixel-red">
+                  {copyError}
+                </div>
+              )}
+            </div>
+
+            <div className="bg-pixel-white border-t-4 border-pixel-black px-6 py-4 flex gap-3 justify-end">
+              <PixelButton variant="secondary" onClick={() => setCopyProvider(null)}>取消</PixelButton>
+              <PixelButton variant="primary" onClick={handleCopyProvider} disabled={copying}>
+                {copying ? '复制中...' : '复制'}
+              </PixelButton>
+            </div>
+          </motion.div>
+        </motion.div>
+      )}
+
       {showForm && (
         <motion.div
           initial={{ opacity: 0 }}
@@ -409,82 +651,136 @@ export default function ProviderSettingsPage() {
             initial={{ scale: 0.9, opacity: 0 }}
             animate={{ scale: 1, opacity: 1 }}
             exit={{ scale: 0.9, opacity: 0 }}
-            className="bg-pixel-white border-8 border-pixel-black w-full max-w-lg max-h-[90vh] overflow-y-auto"
+            className="bg-pixel-white border-8 border-pixel-black w-full max-w-3xl max-h-[90vh] overflow-y-auto"
             style={{ boxShadow: '8px 8px 0 #101010' }}
-            onClick={e => e.stopPropagation()}
+            onClick={(e) => e.stopPropagation()}
           >
             <div className="bg-pixel-yellow border-b-4 border-pixel-black px-6 py-4 flex items-center justify-between">
-              <h2 className="font-pixel text-xl text-pixel-black flex items-center gap-2">
-                <span>{TABS.find(t => t.key === activeTab)?.icon}</span>
+              <h2 className="font-pixel text-xl text-pixel-black">
                 {editingProvider ? '编辑供应商' : '新增供应商'}
               </h2>
               <button
                 onClick={() => setShowForm(false)}
                 className="font-pixel text-pixel-black hover:text-pixel-red text-2xl leading-none"
               >
-                ×
+                x
               </button>
             </div>
 
             <div className="p-6 space-y-5">
-              {/* Name */}
+              <section>
+                <label className="font-pixel text-xs text-pixel-black/60 mb-2 block">
+                  常用供应商
+                </label>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {tabPresets.map((preset) => (
+                    <button
+                      key={preset.key}
+                      type="button"
+                      onClick={() => applyPreset(preset, Boolean(editingProvider))}
+                      className={`text-left border-4 p-3 transition-colors ${
+                        selectedPresetKey === preset.key
+                          ? 'border-pixel-black bg-pixel-yellow/30'
+                          : 'border-pixel-black/25 bg-pixel-white hover:border-pixel-black'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-3 mb-1">
+                        <span className="font-pixel text-base font-bold">{preset.label}</span>
+                        <span className="font-mono text-[10px] px-2 py-0.5 bg-pixel-black/10">
+                          {preset.protocol}
+                        </span>
+                      </div>
+                      <p className="font-pixel text-xs text-pixel-black/55 leading-relaxed">
+                        {preset.description}
+                      </p>
+                      {preset.baseUrl && (
+                        <div className="font-mono text-[11px] text-pixel-black/45 mt-2 truncate">
+                          {preset.baseUrl}
+                        </div>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              </section>
+
               <div>
                 <label className="font-pixel text-xs text-pixel-black/60 mb-1 block">供应商名称</label>
                 <input
                   type="text"
                   value={formName}
-                  onChange={e => setFormName(e.target.value)}
-                  placeholder="例如：我的 Claude"
+                  onChange={(e) => setFormName(e.target.value)}
+                  placeholder="例如：我的 Kimi Coding"
                   className="w-full px-4 py-2 border-4 border-pixel-black font-pixel bg-pixel-white"
                 />
               </div>
 
-              {/* API Key */}
               <div>
                 <label className="font-pixel text-xs text-pixel-black/60 mb-1 block">
-                  {PROVIDER_INFO[activeTab]?.keyField}
+                  {selectedPreset?.apiKeyField || 'API_KEY'}
                 </label>
                 <input
                   type="password"
                   value={formApiKey}
-                  onChange={e => setFormApiKey(e.target.value)}
-                  placeholder="sk-..."
+                  onChange={(e) => setFormApiKey(e.target.value)}
+                  placeholder="输入 API Key"
                   className="w-full px-4 py-2 border-4 border-pixel-black font-pixel bg-pixel-white"
                 />
-                {PROVIDER_INFO[activeTab]?.url && (
-                  <a
-                    href={PROVIDER_INFO[activeTab].url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="font-pixel text-xs text-pixel-blue hover:underline mt-1 inline-block"
-                  >
-                    获取 API Key →
-                  </a>
-                )}
+                <div className="flex flex-wrap gap-3 mt-1">
+                  {selectedPreset?.apiKeyUrl && (
+                    <a
+                      href={selectedPreset.apiKeyUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="font-pixel text-xs text-pixel-blue hover:underline"
+                    >
+                      获取 API Key
+                    </a>
+                  )}
+                  {selectedPreset?.docsUrl && (
+                    <a
+                      href={selectedPreset.docsUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="font-pixel text-xs text-pixel-blue hover:underline"
+                    >
+                      官方文档
+                    </a>
+                  )}
+                </div>
+              </div>
+
+              <div>
+                <label className="font-pixel text-xs text-pixel-black/60 mb-1 block">
+                  Base URL
+                </label>
+                <input
+                  type="text"
+                  value={formBaseUrl}
+                  onChange={(e) => setFormBaseUrl(e.target.value)}
+                  disabled={!baseUrlEditable}
+                  placeholder={selectedPreset?.baseUrlHelp || 'https://api.example.com/v1'}
+                  className={`w-full px-4 py-2 border-4 border-pixel-black font-mono text-sm ${
+                    baseUrlEditable ? 'bg-pixel-white' : 'bg-pixel-black/5 text-pixel-black/55 cursor-not-allowed'
+                  }`}
+                />
                 <p className="font-pixel text-xs text-pixel-black/40 mt-1">
-                  {PROVIDER_INFO[activeTab]?.hint}
+                  {baseUrlEditable
+                    ? selectedPreset?.baseUrlHelp || '按该供应商官方要求填写 Base URL。'
+                    : '官方预设的 Base URL 已锁定，避免误改导致供应商不可用。'}
                 </p>
               </div>
 
-              {/* Base URL */}
-              {(activeTab === 'opencode' || activeTab === 'openclaw' || activeTab === 'hermes') && (
-                <div>
-                  <label className="font-pixel text-xs text-pixel-black/60 mb-1 block">自定义 Base URL（可选）</label>
-                  <input
-                    type="text"
-                    value={formBaseUrl}
-                    onChange={e => setFormBaseUrl(e.target.value)}
-                    placeholder="https://api.example.com/v1"
-                    className="w-full px-4 py-2 border-4 border-pixel-black font-pixel bg-pixel-white"
-                  />
-                </div>
-              )}
-
-              {/* Models */}
               <div>
-                <label className="font-pixel text-xs text-pixel-black/60 mb-2 block">支持的模型（可多选）</label>
-                <div className="space-y-1 max-h-48 overflow-y-auto border-4 border-pixel-black/20 p-2">
-                  {(DEFAULT_MODELS[activeTab] || []).map(model => (
+                <label className="font-pixel text-xs text-pixel-black/60 mb-2 block">
+                  支持的模型（可多选）
+                </label>
+                <div className="space-y-1 max-h-56 overflow-y-auto border-4 border-pixel-black/20 p-2">
+                  {(selectedPreset?.models || []).length === 0 && (
+                    <div className="font-pixel text-xs text-pixel-black/45 p-3 text-center">
+                      该预设没有固定模型，请在下方添加模型 ID。
+                    </div>
+                  )}
+                  {(selectedPreset?.models || []).map((model) => (
                     <label
                       key={model.id}
                       className="flex items-center gap-2 px-3 py-2 border-2 border-pixel-black/10 hover:border-pixel-black cursor-pointer transition-colors"
@@ -496,21 +792,21 @@ export default function ProviderSettingsPage() {
                         className="w-4 h-4"
                       />
                       <span className="font-pixel text-sm">{model.name}</span>
-                      <span className="font-mono text-xs text-pixel-black/40 ml-auto">{model.id}</span>
+                      <span className="font-mono text-xs text-pixel-black/40 ml-auto truncate">
+                        {model.id}
+                      </span>
                     </label>
                   ))}
 
-                  {/* Custom Models */}
-                  {formModels.filter(m => !(DEFAULT_MODELS[activeTab] || []).some(dm => dm.id === m)).map(modelId => (
+                  {formModels.filter((modelId) => !presetModelIds.has(modelId)).map((modelId) => (
                     <div
                       key={modelId}
                       className="flex items-center gap-2 px-3 py-2 border-2 border-pixel-yellow bg-pixel-yellow/10"
                     >
-                      <span className="w-4 h-4 bg-pixel-yellow flex items-center justify-center font-pixel text-xs">✓</span>
                       <span className="font-pixel text-sm text-pixel-black">{modelId}</span>
                       <button
                         type="button"
-                        onClick={() => removeCustomModel(modelId)}
+                        onClick={() => removeModel(modelId)}
                         className="ml-auto px-2 py-0.5 bg-pixel-red border border-pixel-black font-pixel text-xs text-pixel-white hover:bg-pixel-red/80"
                       >
                         删除
@@ -519,15 +815,19 @@ export default function ProviderSettingsPage() {
                   ))}
                 </div>
 
-                {/* Add Custom Model */}
                 <div className="mt-2 flex gap-2">
                   <input
                     type="text"
                     value={customModel}
-                    onChange={e => setCustomModel(e.target.value)}
-                    onKeyDown={e => e.key === 'Enter' && addCustomModel()}
+                    onChange={(e) => setCustomModel(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        addCustomModel();
+                      }
+                    }}
                     placeholder="输入自定义模型 ID"
-                    className="flex-1 px-3 py-2 border-4 border-pixel-black font-mono text-sm bg-pixel-white"
+                    className="flex-1 px-3 py-2 border-4 border-pixel-black font-mono text-sm bg-pixel-white min-w-0"
                   />
                   <button
                     type="button"
@@ -535,12 +835,9 @@ export default function ProviderSettingsPage() {
                     className="px-4 py-2 bg-pixel-blue border-4 border-pixel-black font-pixel text-sm text-pixel-white hover:bg-pixel-blue/80 transition-colors"
                     style={{ boxShadow: '3px 3px 0 #101010' }}
                   >
-                    + 添加
+                    添加
                   </button>
                 </div>
-                <p className="font-pixel text-xs text-pixel-black/40 mt-1">
-                  可输入模型 ID（如 deepseek-chat）添加列表中没有的模型
-                </p>
               </div>
 
               {error && (

@@ -9,10 +9,10 @@ const PUBLIC_PATHS = ['/', '/auth/login', '/auth/register'];
 export function useRouteGuard() {
   const router = useRouter();
   const pathname = usePathname();
-  const { token, isLoading } = useAuthStore();
+  const { token, isLoading, hasHydrated } = useAuthStore();
 
   useEffect(() => {
-    if (isLoading) return;
+    if (isLoading || !hasHydrated) return;
 
     const isPublic = PUBLIC_PATHS.some(
       (p) => pathname === p || pathname.startsWith('/auth/')
@@ -21,5 +21,5 @@ export function useRouteGuard() {
     if (!isPublic && !token) {
       router.push('/auth/login');
     }
-  }, [token, isLoading, pathname, router]);
+  }, [token, isLoading, hasHydrated, pathname, router]);
 }

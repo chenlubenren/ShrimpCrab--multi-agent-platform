@@ -1,0 +1,17 @@
+{
+  "name": "openclaw-desktop-client",
+  "version": "0.1.0",
+  "private": true,
+  "description": "OpenClaw desktop shell with local agent import",
+  "main": "src/main.cjs",
+  "scripts": {
+    "dev": "electron .",
+    "start": "electron .",
+    "scan": "node src/local-agent-scanner.cjs",
+    "smoke:scan": "node scripts/smoke-local-agent-scanner.cjs",
+    "smoke:ui": "node scripts/smoke-renderer-ui.cjs"
+  },
+  "devDependencies": {
+    "electron": "^31.7.0"
+  }
+}

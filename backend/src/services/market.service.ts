@@ -9,14 +9,26 @@ import {
 import {
   deleteDirectory,
   getMarketAgentPath,
+  getAgentWorkspacePath,
+  getAgentBaselinePath,
+  cloneDirectory,
+  generateAgentKey,
   calculateDirChecksum,
   getDirectorySize,
+  resolveStoredPath,
 } from './workspace.service.js';
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
+import {
+  formatPublishSanitizationMessage,
+  sanitizePublishFileForMarket,
+  shouldSkipPublishPath,
+  type PublishRisk,
+} from './publish-safety.service.js';
 
 const PROFILE_CACHE_ROOT = path.join(process.cwd(), 'data', 'claw_profile');
+const SOURCE_INSTANCE_TAG_PREFIX = 'sourceInstance:';
 
 function ensureProfileDir(): void {
   if (!fs.existsSync(PROFILE_CACHE_ROOT)) {
@@ -31,7 +43,7 @@ export interface MarketAgentWithStats {
   name: string;
   description: string;
   ownerUserId: string;
-  ownerUsername?: string;
+  ownerUsername?: string | null;
   latestVersion: string;
   visibility: string;
   status: string;
@@ -48,6 +60,121 @@ export interface MarketAgentWithStats {
   cachedCoverUrl?: string;
 }
 
+function parseMarketTags(rawTags: unknown): string[] {
+  if (Array.isArray(rawTags)) {
+    return rawTags.filter((tag): tag is string => typeof tag === 'string' && tag.trim().length > 0);
+  }
+  if (typeof rawTags !== 'string' || rawTags.trim().length === 0) return [];
+  try {
+    const parsed = JSON.parse(rawTags);
+    return Array.isArray(parsed)
+      ? parsed.filter((tag): tag is string => typeof tag === 'string' && tag.trim().length > 0)
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function uniqueTags(tags: unknown[]): string[] {
+  return Array.from(
+    new Set(
+      tags
+        .filter((tag): tag is string => typeof tag === 'string')
+        .map((tag) => tag.trim())
+        .filter(Boolean)
+    )
+  );
+}
+
+function getSourceInstanceTag(agentInstanceId: string): string {
+  return `${SOURCE_INSTANCE_TAG_PREFIX}${agentInstanceId}`;
+}
+
+function copyPublishableWorkspace(
+  source: string,
+  destination: string,
+  root: string = source,
+  sanitizedRisks: PublishRisk[] = []
+): boolean {
+  try {
+    if (!fs.existsSync(source)) return false;
+    if (!fs.existsSync(destination)) {
+      fs.mkdirSync(destination, { recursive: true });
+    }
+
+    const entries = fs.readdirSync(source, { withFileTypes: true });
+    for (const entry of entries) {
+      const srcPath = path.join(source, entry.name);
+      const relativePath = path.relative(root, srcPath).replace(/\\/g, '/');
+
+      if (shouldSkipPublishPath(relativePath, entry.isDirectory()) || entry.isSymbolicLink()) {
+        continue;
+      }
+
+      const destPath = path.join(destination, entry.name);
+      if (entry.isDirectory()) {
+        if (!copyPublishableWorkspace(srcPath, destPath, root, sanitizedRisks)) {
+          return false;
+        }
+      } else if (entry.isFile()) {
+        const buffer = fs.readFileSync(srcPath);
+        const sanitized = sanitizePublishFileForMarket(relativePath, buffer);
+        sanitizedRisks.push(...sanitized.risks);
+        if (sanitized.action === 'omit' || !sanitized.buffer) {
+          continue;
+        }
+
+        fs.mkdirSync(path.dirname(destPath), { recursive: true });
+        fs.writeFileSync(destPath, sanitized.buffer);
+      }
+    }
+
+    return true;
+  } catch (error) {
+    console.warn('Failed to copy publishable workspace entry:', error);
+    return false;
+  }
+}
+
+function stripInternalMarketTags(tags: unknown): string[] {
+  return parseMarketTags(tags).filter((tag) => !tag.startsWith(SOURCE_INSTANCE_TAG_PREFIX));
+}
+
+export async function getPublishedMarketAgentForInstance(
+  userId: string,
+  agentInstanceId: string
+): Promise<{ id: string; status: string } | null> {
+  const rawDb = getRawDb();
+  const sourceTag = getSourceInstanceTag(agentInstanceId);
+  const rows = rawDb.prepare(`
+    SELECT id, status, tags, name, description
+    FROM market_agents
+    WHERE owner_user_id = ? AND status = 'active'
+    ORDER BY updated_at DESC
+  `).all(userId) as Array<{ id: string; status: string; tags: string; name: string; description: string }>;
+
+  const match = rows.find((row) => parseMarketTags(row.tags).includes(sourceTag));
+  if (match) return { id: match.id, status: match.status };
+
+  const sourceAgent = rawDb.prepare(`
+    SELECT name, description
+    FROM user_agent_instances
+    WHERE id = ? AND user_id = ?
+  `).get(agentInstanceId, userId) as { name: string; description: string } | undefined;
+
+  const legacyMatch = sourceAgent
+    ? rows.find((row) => row.name === sourceAgent.name && row.description === sourceAgent.description)
+    : undefined;
+
+  if (legacyMatch) {
+    const tags = uniqueTags([...parseMarketTags(legacyMatch.tags), sourceTag]);
+    rawDb.prepare('UPDATE market_agents SET tags = ? WHERE id = ?').run(JSON.stringify(tags), legacyMatch.id);
+    return { id: legacyMatch.id, status: legacyMatch.status };
+  }
+
+  return null;
+}
+
 export async function getMarketAgents(
   options: {
     status?: string;
@@ -61,7 +188,7 @@ export async function getMarketAgents(
   const db = getDb();
   const { status = 'active', visibility = 'public', search, limit = 50, offset = 0 } = options;
 
-  let query = db
+  const query = db
     .select({
       id: marketAgents.id,
       name: marketAgents.name,
@@ -84,21 +211,13 @@ export async function getMarketAgents(
     .where(
       and(
         status ? eq(marketAgents.status, status) : undefined,
-        visibility ? eq(marketAgents.visibility, visibility) : undefined
+        visibility ? eq(marketAgents.visibility, visibility) : undefined,
+        search ? like(marketAgents.name, `%${search}%`) : undefined
       )
     )
     .orderBy(desc(marketAgents.downloadCount), desc(marketAgents.rating))
     .limit(limit)
     .offset(offset);
-
-  if (search) {
-    query = query.where(
-      and(
-        eq(marketAgents.status, status),
-        like(marketAgents.name, `%${search}%`)
-      )
-    ) as any;
-  }
 
   const results = await query;
 
@@ -117,7 +236,7 @@ export async function getMarketAgents(
 
     agentsWithStats.push({
       ...agent,
-      tags: typeof agent.tags === 'string' ? JSON.parse(agent.tags) : agent.tags || [],
+      tags: stripInternalMarketTags(agent.tags),
       hasWorkspace,
       workspaceSize,
       cachedAvatarUrl: cachedAvatar.url,
@@ -165,7 +284,7 @@ export async function getMarketAgentById(marketAgentId: string): Promise<MarketA
 
   return {
     ...result,
-    tags: typeof result.tags === 'string' ? JSON.parse(result.tags) : result.tags || [],
+    tags: stripInternalMarketTags(result.tags),
     hasWorkspace,
     workspaceSize,
     cachedAvatarUrl: cachedAvatar.url,
@@ -330,6 +449,36 @@ export async function getMarketAgentCachedIcon(
   return { url: result.url, cached: result.cached };
 }
 
+function copyImageIfExists(sourcePath: string, destPath: string): boolean {
+  if (!fs.existsSync(sourcePath)) return false;
+  if (path.resolve(sourcePath) !== path.resolve(destPath)) {
+    fs.copyFileSync(sourcePath, destPath);
+  }
+  return true;
+}
+
+function resolveLocalApiImage(url: string): string | null {
+  const agentAvatarMatch = url.match(/^\/api\/agents\/([^/]+)\/avatar\/([^/?#]+)$/);
+  if (agentAvatarMatch) {
+    const [, agentId, rawFilename] = agentAvatarMatch;
+    const filename = path.basename(decodeURIComponent(rawFilename));
+    const row = getRawDb()
+      .prepare('SELECT workspace_path AS workspacePath FROM user_agent_instances WHERE id = ?')
+      .get(agentId) as { workspacePath?: string } | undefined;
+
+    if (!row?.workspacePath) return null;
+    return path.join(path.dirname(resolveStoredPath(row.workspacePath)), 'avatars', filename);
+  }
+
+  const profileMatch = url.match(/^\/api\/profile\/([^/?#]+)$/);
+  if (profileMatch) {
+    const filename = path.basename(decodeURIComponent(profileMatch[1]));
+    return path.join(PROFILE_CACHE_ROOT, filename);
+  }
+
+  return null;
+}
+
 async function downloadAndCacheImage(url: string, destPath: string): Promise<void> {
   // Handle data URLs (base64)
   if (url.startsWith('data:image')) {
@@ -341,11 +490,31 @@ async function downloadAndCacheImage(url: string, destPath: string): Promise<voi
     }
   }
 
+  if (url.startsWith('/api/')) {
+    const sourcePath = resolveLocalApiImage(url);
+    if (sourcePath && copyImageIfExists(sourcePath, destPath)) {
+      return;
+    }
+  }
+
+  if (url.startsWith('http://') || url.startsWith('https://')) {
+    try {
+      const parsed = new URL(url);
+      if (parsed.pathname.startsWith('/api/')) {
+        const sourcePath = resolveLocalApiImage(decodeURI(parsed.pathname));
+        if (sourcePath && copyImageIfExists(sourcePath, destPath)) {
+          return;
+        }
+      }
+    } catch {
+      // Fall through to network fetch below.
+    }
+  }
+
   // Handle file URLs
   if (url.startsWith('file://')) {
     const sourcePath = url.replace('file://', '');
-    if (fs.existsSync(sourcePath)) {
-      fs.copyFileSync(sourcePath, destPath);
+    if (copyImageIfExists(sourcePath, destPath)) {
       return;
     }
   }
@@ -387,6 +556,93 @@ export function clearAvatarCache(agentId?: string): void {
   }
 }
 
+export async function downloadMarketAgentToUser(
+  userId: string,
+  marketAgentId: string
+): Promise<{ success: boolean; agentId?: string; error?: string }> {
+  const agent = await getMarketAgentById(marketAgentId);
+  if (!agent) {
+    return { success: false, error: '市场 Agent 不存在' };
+  }
+
+  if (agent.status !== 'active') {
+    return { success: false, error: '市场 Agent 当前不可下载' };
+  }
+
+  if (agent.visibility === 'private' && agent.ownerUserId !== userId) {
+    return { success: false, error: '无权下载此市场 Agent' };
+  }
+
+  if (!agent.hasWorkspace) {
+    return { success: false, error: '市场 Agent 缺少可下载的工作区' };
+  }
+
+  const db = getRawDb();
+  const now = Date.now();
+  const agentId = crypto.randomUUID().replace(/-/g, '');
+  const workspacePath = getAgentWorkspacePath(userId, agentId);
+  const baselinePath = getAgentBaselinePath(userId, agentId);
+  const agentRoot = path.dirname(workspacePath);
+  const marketPath = getMarketAgentPath(marketAgentId, agent.latestVersion);
+
+  try {
+    if (!cloneDirectory(marketPath, workspacePath)) {
+      deleteDirectory(agentRoot);
+      return { success: false, error: '复制市场 Agent 工作区失败' };
+    }
+
+    cloneDirectory(workspacePath, baselinePath);
+
+    const manifestPath = path.join(workspacePath, 'agent.manifest.json');
+    const manifest = fs.existsSync(manifestPath)
+      ? fs.readFileSync(manifestPath, 'utf-8')
+      : '{}';
+    const avatarResult = await getOrCacheAvatar(marketAgentId, agent.icon);
+    const avatar = avatarResult.cached ? avatarResult.url : agent.cachedAvatarUrl || agent.icon || '';
+
+    db.prepare(`
+      INSERT INTO user_agent_instances (
+        id, user_id, source_market_agent_id, source_version, name, description,
+        avatar, agent_key, workspace_path, state_dir, baseline_snapshot_path, status,
+        manifest, tags, cave_id, provider_id, conversation_count, total_messages,
+        last_active_at, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      agentId,
+      userId,
+      marketAgentId,
+      agent.latestVersion || '1.0.0',
+      agent.name,
+      agent.description || '',
+      avatar,
+      generateAgentKey(),
+      workspacePath,
+      path.join(workspacePath, '.openclaw'),
+      baselinePath,
+      'idle',
+      manifest,
+      JSON.stringify(agent.tags || []),
+      null,
+      null,
+      0,
+      0,
+      null,
+      now,
+      now
+    );
+
+    await incrementDownloadCount(marketAgentId);
+    return { success: true, agentId };
+  } catch (error) {
+    deleteDirectory(agentRoot);
+    console.error('Failed to download market agent:', error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : '下载市场 Agent 失败',
+    };
+  }
+}
+
 // ==================== Download Tracking ====================
 
 export async function incrementDownloadCount(marketAgentId: string): Promise<void> {
@@ -421,7 +677,6 @@ export async function publishAgentToMarket(
     const db = getDb();
     const rawDb = getRawDb();
     const now = Date.now();
-    const marketAgentId = crypto.randomUUID().replace(/-/g, '');
 
     // Verify user owns the agent
     const agent = await db
@@ -437,16 +692,36 @@ export async function publishAgentToMarket(
       return { success: false, error: 'Agent不存在或无权访问' };
     }
 
+    const existing = await getPublishedMarketAgentForInstance(userId, agentInstanceId);
+    if (existing) {
+      return { success: true, marketAgentId: existing.id };
+    }
+
+    const workspacePath = resolveStoredPath(agent.workspacePath);
+    if (!fs.existsSync(workspacePath)) {
+      return { success: false, error: 'Agent workspace 不存在，无法发布到市场' };
+    }
+
     // Copy workspace to market
+    const marketAgentId = crypto.randomUUID().replace(/-/g, '');
     const marketPath = getMarketAgentPath(marketAgentId, '1.0.0');
-    const { cloneDirectory } = await import('./workspace.service.js');
-    
-    if (fs.existsSync(agent.workspacePath)) {
-      cloneDirectory(agent.workspacePath, marketPath);
+    const sanitizedRisks: PublishRisk[] = [];
+
+    if (!copyPublishableWorkspace(workspacePath, marketPath, workspacePath, sanitizedRisks)) {
+      deleteDirectory(marketPath);
+      return { success: false, error: '复制 Agent workspace 到市场目录失败' };
+    }
+    if (sanitizedRisks.length > 0) {
+      console.info(formatPublishSanitizationMessage(sanitizedRisks));
     }
 
     // Calculate checksum
     const checksum = calculateDirChecksum(marketPath) || '';
+
+    const storedTags = uniqueTags([
+      ...parseMarketTags(tags),
+      getSourceInstanceTag(agentInstanceId),
+    ]);
 
     // Insert market agent
     rawDb.prepare(`
@@ -463,7 +738,7 @@ export async function publishAgentToMarket(
       '1.0.0',
       visibility,
       'active',
-      JSON.stringify(tags),
+      JSON.stringify(storedTags),
       agent.avatar || '',
       '',
       0,
@@ -498,4 +773,47 @@ export async function publishAgentToMarket(
       error: error instanceof Error ? error.message : '发布到市场失败'
     };
   }
+}
+
+export async function unpublishMarketAgent(
+  userId: string,
+  marketAgentId: string
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const rawDb = getRawDb();
+    const agent = rawDb.prepare(`
+      SELECT id, owner_user_id AS ownerUserId
+      FROM market_agents
+      WHERE id = ?
+    `).get(marketAgentId) as { id: string; ownerUserId: string } | undefined;
+
+    if (!agent || agent.ownerUserId !== userId) {
+      return { success: false, error: '市场 Agent 不存在或无权下架' };
+    }
+
+    rawDb.prepare('DELETE FROM market_agent_versions WHERE market_agent_id = ?').run(marketAgentId);
+    rawDb.prepare('DELETE FROM market_agents WHERE id = ?').run(marketAgentId);
+
+    const marketAgentRoot = path.join(process.cwd(), 'data', 'workspaces', 'market', 'agents', marketAgentId);
+    deleteDirectory(marketAgentRoot);
+
+    return { success: true };
+  } catch (error) {
+    console.error('Failed to unpublish market agent:', error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : '下架市场 Agent 失败',
+    };
+  }
+}
+
+export async function unpublishAgentFromMarket(
+  userId: string,
+  agentInstanceId: string
+): Promise<{ success: boolean; error?: string }> {
+  const existing = await getPublishedMarketAgentForInstance(userId, agentInstanceId);
+  if (!existing) {
+    return { success: false, error: '此 Agent 尚未上架到市场' };
+  }
+  return unpublishMarketAgent(userId, existing.id);
 }

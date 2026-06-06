@@ -6,28 +6,42 @@ import {
   getMarketAgentVersions,
   cleanInvalidMarketAgents,
   cacheAllMarketAgentIcons,
-  getOrCacheAvatar,
   clearAvatarCache,
-  incrementDownloadCount,
   publishAgentToMarket,
+  downloadMarketAgentToUser,
 } from '../services/market.service.js';
+import {
+  deployCozeAgentToUser,
+  getCozeRuntimeInfo,
+  listCozeMarketAgents,
+} from '../services/coze-market.service.js';
 
 const router = Router();
+
+function firstParam(value: unknown, fallback = ''): string {
+  if (Array.isArray(value)) return value[0] ? String(value[0]) : fallback;
+  return typeof value === 'string' ? value : fallback;
+}
 
 // ==================== Public Market Routes ====================
 
 // GET /api/market - List all active market agents
 router.get('/', async (req: Request, res: Response) => {
   try {
-    const { status, visibility, search, tags, limit = '50', offset = '0' } = req.query;
+    const status = firstParam(req.query.status, 'active');
+    const visibility = firstParam(req.query.visibility, 'public');
+    const search = firstParam(req.query.search);
+    const tags = firstParam(req.query.tags);
+    const limit = firstParam(req.query.limit, '50');
+    const offset = firstParam(req.query.offset, '0');
 
     const agents = await getMarketAgents({
-      status: status as string || 'active',
-      visibility: visibility as string || 'public',
-      search: search as string,
-      tags: tags ? (tags as string).split(',') : undefined,
-      limit: Math.min(parseInt(limit as string) || 50, 100),
-      offset: parseInt(offset as string) || 0,
+      status,
+      visibility,
+      search,
+      tags: tags ? tags.split(',') : undefined,
+      limit: Math.min(parseInt(limit) || 50, 100),
+      offset: parseInt(offset) || 0,
     });
 
     res.json({ agents });
@@ -37,10 +51,33 @@ router.get('/', async (req: Request, res: Response) => {
   }
 });
 
+// GET /api/market/coze - List deployable Coze-backed agents
+router.get('/coze', async (req: Request, res: Response) => {
+  try {
+    const search = firstParam(req.query.search);
+    const category = firstParam(req.query.category);
+    const limit = firstParam(req.query.limit, '50');
+
+    const agents = listCozeMarketAgents({
+      search,
+      category,
+      limit: Math.min(parseInt(limit) || 50, 100),
+    });
+
+    res.json({
+      agents,
+      runtime: getCozeRuntimeInfo(),
+    });
+  } catch (error) {
+    console.error('Get Coze market agents error:', error);
+    res.status(500).json({ message: '获取跨次元市场失败' });
+  }
+});
+
 // GET /api/market/:id - Get a specific market agent
 router.get('/:id', async (req: Request, res: Response) => {
   try {
-    const { id } = req.params;
+    const id = firstParam(req.params.id);
     const agent = await getMarketAgentById(id);
 
     if (!agent) {
@@ -58,7 +95,7 @@ router.get('/:id', async (req: Request, res: Response) => {
 // GET /api/market/:id/versions - Get versions of a market agent
 router.get('/:id/versions', async (req: Request, res: Response) => {
   try {
-    const { id } = req.params;
+    const id = firstParam(req.params.id);
     const versions = await getMarketAgentVersions(id);
     res.json({ versions });
   } catch (error) {
@@ -71,25 +108,43 @@ router.get('/:id/versions', async (req: Request, res: Response) => {
 
 router.use(authMiddleware);
 
+// POST /api/market/coze/:botId/deploy - Deploy a Coze bot as a local user agent
+router.post('/coze/:botId/deploy', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const userId = req.user!.userId;
+    const botId = firstParam(req.params.botId);
+
+    const result = await deployCozeAgentToUser(userId, botId);
+    if (!result.success) {
+      res.status(400).json({ message: result.error || '部署 Coze Agent 失败' });
+      return;
+    }
+
+    res.json({
+      success: true,
+      agentId: result.agentId,
+      message: '已部署为本平台 Agent',
+      runtime: getCozeRuntimeInfo(),
+    });
+  } catch (error) {
+    console.error('Deploy Coze agent error:', error);
+    res.status(500).json({ message: '部署 Coze Agent 失败' });
+  }
+});
+
 // POST /api/market/:id/download - Download an agent (creates user instance)
 router.post('/:id/download', async (req: AuthenticatedRequest, res: Response) => {
   try {
     const userId = req.user!.userId;
-    const { id } = req.params;
+    const id = firstParam(req.params.id);
 
-    const agent = await getMarketAgentById(id);
-    if (!agent) {
-      res.status(404).json({ message: '市场Agent不存在' });
+    const result = await downloadMarketAgentToUser(userId, id);
+    if (!result.success) {
+      res.status(400).json({ message: result.error || '下载失败' });
       return;
     }
 
-    // Increment download count
-    await incrementDownloadCount(id);
-
-    // TODO: Create user agent instance from market agent
-    // This would clone the workspace and create a user_agent_instances record
-
-    res.json({ success: true, message: '下载成功' });
+    res.json({ success: true, agentId: result.agentId, message: '下载成功' });
   } catch (error) {
     console.error('Download agent error:', error);
     res.status(500).json({ message: '下载失败' });
@@ -165,7 +220,7 @@ router.post('/cache-icons', async (req: AuthenticatedRequest, res: Response) => 
 // DELETE /api/market/cache/:agentId - Clear avatar cache for an agent
 router.delete('/cache/:agentId', async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const { agentId } = req.params;
+    const agentId = firstParam(req.params.agentId);
     clearAvatarCache(agentId);
     res.json({ success: true });
   } catch (error) {

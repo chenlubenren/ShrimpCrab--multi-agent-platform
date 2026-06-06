@@ -12,6 +12,11 @@ import {
   resolveAgentType,
   type AgentPlatformType,
 } from './agent-type.service.js';
+import {
+  scanPublishDirectory,
+  scanPublishFile,
+} from './publish-safety.service.js';
+import { publishAgentToMarket } from './market.service.js';
 
 export interface AgentManifest {
   schemaVersion?: string;
@@ -39,6 +44,11 @@ export interface UploadResult {
 export interface FolderFileInput {
   path: string;
   content: string; // base64
+}
+
+export interface UploadAgentMetadata {
+  description?: string;
+  avatar?: string;
 }
 
 const MAX_FILES = 1000;
@@ -146,6 +156,20 @@ function applyAgentType(manifest: AgentManifest, agentType: AgentPlatformType): 
   };
 }
 
+function applyUploadMetadata(manifest: AgentManifest, metadata?: UploadAgentMetadata): AgentManifest {
+  const description = metadata?.description?.trim();
+  if (!description) return manifest;
+  return {
+    ...manifest,
+    description,
+  };
+}
+
+function normalizeAvatar(avatar?: string): string {
+  const value = avatar?.trim() || '';
+  return value.length <= 750_000 ? value : '';
+}
+
 function buildTags(manifest: AgentManifest, agentType: AgentPlatformType): string {
   const caps = manifest.capabilities || [];
   const platformTag = agentType !== 'unknown' ? `platform:${agentType}` : null;
@@ -160,12 +184,14 @@ function insertAgentRecord(
   workspacePath: string,
   baselinePath: string,
   manifest: AgentManifest,
-  agentType: AgentPlatformType
+  agentType: AgentPlatformType,
+  metadata?: UploadAgentMetadata
 ): string {
   const db = getRawDb();
   const agentKey = generateAgentKey();
   const now = Date.now();
   const finalManifest = applyAgentType(manifest, agentType);
+  const avatar = normalizeAvatar(metadata?.avatar);
 
   // Use better-sqlite3 native API (db.insert is Drizzle, not better-sqlite3)
   const stmt = db.prepare(`
@@ -184,7 +210,7 @@ function insertAgentRecord(
     finalManifest.version || '1.0.0',
     agentName,
     finalManifest.description || '',
-    '',
+    avatar,
     agentKey,
     workspacePath,
     path.join(workspacePath, '.openclaw'),
@@ -209,7 +235,9 @@ export async function processFolderUpload(
   userId: string,
   files: FolderFileInput[],
   agentName: string,
-  userAgentType?: string
+  userAgentType?: string,
+  shouldPublishToMarket = false,
+  metadata?: UploadAgentMetadata
 ): Promise<UploadResult> {
   if (!files.length) {
     return { success: false, error: '文件夹为空，请选择包含文件的目录' };
@@ -219,9 +247,7 @@ export async function processFolderUpload(
     return { success: false, error: `文件数量过多，最多 ${MAX_FILES} 个文件` };
   }
 
-  const agentId = generateId();
-  const workspacePath = getAgentWorkspacePath(userId, agentId);
-  const baselinePath = getAgentBaselinePath(userId, agentId);
+  let workspacePathForCleanup: string | null = null;
 
   try {
     const sanitizedPaths = files.map((f) => ({
@@ -238,31 +264,46 @@ export async function processFolderUpload(
 
     let totalBytes = 0;
     let writtenCount = 0;
-
-    for (const file of sanitizedPaths) {
+    const decodedFiles = sanitizedPaths.map((file) => {
       const relativePath = file.safePath!.startsWith(rootPrefix)
         ? file.safePath!.slice(rootPrefix.length)
         : file.safePath!;
 
-      const destPath = path.join(workspacePath, relativePath);
-      if (!isPathSafe(workspacePath, destPath)) {
-        return { success: false, error: '检测到路径穿越，已拒绝上传' };
-      }
-
       const buffer = Buffer.from(file.content, 'base64');
       totalBytes += buffer.length;
 
-      if (totalBytes > MAX_TOTAL_BYTES) {
+      return { relativePath, buffer };
+    });
+
+    if (totalBytes > MAX_TOTAL_BYTES) {
+      return { success: false, error: `总大小超过 ${MAX_TOTAL_BYTES / 1024 / 1024}MB 限制` };
+    }
+
+    if (shouldPublishToMarket) {
+      const risks = decodedFiles.flatMap((file) => scanPublishFile(file.relativePath, file.buffer));
+      if (risks.length > 0) {
+        console.info(`Upload publish pre-scan found ${risks.length} risk(s); market copy will be sanitized.`);
+      }
+    }
+
+    const agentId = generateId();
+    const workspacePath = getAgentWorkspacePath(userId, agentId);
+    workspacePathForCleanup = workspacePath;
+    const baselinePath = getAgentBaselinePath(userId, agentId);
+
+    for (const file of decodedFiles) {
+      const destPath = path.join(workspacePath, file.relativePath);
+      if (!isPathSafe(workspacePath, destPath)) {
         deleteDirectorySafe(workspacePath);
-        return { success: false, error: `总大小超过 ${MAX_TOTAL_BYTES / 1024 / 1024}MB 限制` };
+        return { success: false, error: '检测到路径穿越，已拒绝上传' };
       }
 
       fs.mkdirSync(path.dirname(destPath), { recursive: true });
-      fs.writeFileSync(destPath, buffer);
+      fs.writeFileSync(destPath, file.buffer);
       writtenCount++;
     }
 
-    const manifest = readManifestFromDir(workspacePath, agentName);
+    const manifest = applyUploadMetadata(readManifestFromDir(workspacePath, agentName), metadata);
     const relativePaths = sanitizedPaths.map((f) => {
       const relativePath = f.safePath!.startsWith(rootPrefix)
         ? f.safePath!.slice(rootPrefix.length)
@@ -288,7 +329,8 @@ export async function processFolderUpload(
       workspacePath,
       baselinePath,
       manifest,
-      agentType
+      agentType,
+      metadata
     );
 
     return {
@@ -301,7 +343,9 @@ export async function processFolderUpload(
       fileCount: writtenCount,
     };
   } catch (error) {
-    deleteDirectorySafe(workspacePath);
+    if (workspacePathForCleanup) {
+      deleteDirectorySafe(workspacePathForCleanup);
+    }
     console.error('Folder upload error:', error);
     return {
       success: false,
@@ -315,7 +359,9 @@ export async function processZipUpload(
   userId: string,
   zipBuffer: Buffer,
   agentName: string,
-  userAgentType?: string
+  userAgentType?: string,
+  shouldPublishToMarket = false,
+  metadata?: UploadAgentMetadata
 ): Promise<UploadResult> {
   const tmpDir = path.join(process.cwd(), 'data', 'tmp', `upload_${Date.now()}`);
 
@@ -328,13 +374,20 @@ export async function processZipUpload(
     fs.mkdirSync(extractDir, { recursive: true });
     await extractZip(zipPath, extractDir);
 
+    if (shouldPublishToMarket) {
+      const risks = scanPublishDirectory(extractDir);
+      if (risks.length > 0) {
+        console.info(`Zip publish pre-scan found ${risks.length} risk(s); market copy will be sanitized.`);
+      }
+    }
+
     const agentId = generateId();
     const workspacePath = getAgentWorkspacePath(userId, agentId);
     const baselinePath = getAgentBaselinePath(userId, agentId);
 
     cloneDirectory(extractDir, workspacePath);
 
-    const manifest = readManifestFromDir(workspacePath, agentName);
+    const manifest = applyUploadMetadata(readManifestFromDir(workspacePath, agentName), metadata);
     const allPaths = listRelativePaths(workspacePath);
     const agentType = resolveAgentType(
       userAgentType,
@@ -355,7 +408,8 @@ export async function processZipUpload(
       workspacePath,
       baselinePath,
       manifest,
-      agentType
+      agentType,
+      metadata
     );
 
     const fileCount = countFiles(workspacePath);
@@ -428,8 +482,22 @@ async function extractZip(zipPath: string, destDir: string): Promise<void> {
   adm.extractAllTo(destDir, true);
 }
 
+function getMarketPublishTags(manifest?: AgentManifest): string[] {
+  const tags = new Set<string>();
+  for (const capability of manifest?.capabilities || []) {
+    if (capability) tags.add(capability);
+  }
+
+  const entrypointType = manifest?.entrypoint?.type;
+  if (entrypointType && entrypointType !== 'folder' && entrypointType !== 'unknown') {
+    tags.add(`platform:${entrypointType}`);
+  }
+
+  return Array.from(tags);
+}
+
 /**
- * Publish an agent to the market (scrubs sensitive files)
+ * Publish an agent to the market using the durable market version pipeline.
  */
 export async function publishToMarket(
   userId: string,
@@ -437,84 +505,14 @@ export async function publishToMarket(
   agentName: string,
   manifest?: AgentManifest
 ): Promise<{ success: boolean; marketAgentId?: string; error?: string }> {
-  try {
-    const db = getRawDb();
-    const { getAgentWorkspacePath } = await import('./workspace.service.js');
-    
-    // Get agent workspace path
-    const workspacePath = getAgentWorkspacePath(userId, agentId);
-    
-    // Generate market agent ID
-    const marketAgentId = crypto.randomUUID().replace(/-/g, '');
-    const now = Date.now();
-    
-    // Sensitive file patterns to remove
-    const sensitivePatterns = [
-      /\.env$/i, /\.env\.local$/i, /\.env\.production$/i,
-      /secrets\.json$/i, /credentials\.json$/i, /config\.secret\.json$/i,
-      /\.pem$/i, /\.key$/i, /id_rsa/i, /id_ed25519/i,
-    ];
-    
-    // Remove sensitive files from workspace
-    if (fs.existsSync(workspacePath)) {
-      const removeSensitiveFiles = (dir: string) => {
-        const entries = fs.readdirSync(dir, { withFileTypes: true });
-        for (const entry of entries) {
-          const fullPath = path.join(dir, entry.name);
-          if (entry.isDirectory()) {
-            removeSensitiveFiles(fullPath);
-          } else {
-            const fileName = entry.name.toLowerCase();
-            if (sensitivePatterns.some(pattern => pattern.test(fileName))) {
-              try {
-                fs.unlinkSync(fullPath);
-                console.log(`Removed sensitive file: ${fullPath}`);
-              } catch (e) {
-                console.error(`Failed to remove sensitive file: ${fullPath}`, e);
-              }
-            }
-          }
-        }
-      };
-      removeSensitiveFiles(workspacePath);
-    }
-    
-    // Insert into market_agents table
-    const insertMarketAgent = db.prepare(`
-      INSERT INTO market_agents (
-        id, name, description, owner_user_id, latest_version,
-        visibility, status, tags, icon, cover_image,
-        download_count, rating, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-    
-    const tags = JSON.stringify(manifest?.capabilities || []);
-    
-    insertMarketAgent.run(
-      marketAgentId,
-      agentName,
-      manifest?.description || '',
-      userId,
-      manifest?.version || '1.0.0',
-      'public',
-      'active',
-      tags,
-      '',
-      '',
-      0,
-      0,
-      now,
-      now
-    );
-    
-    return { success: true, marketAgentId };
-  } catch (error) {
-    console.error('Failed to publish to market:', error);
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : '发布到市场失败'
-    };
-  }
+  return publishAgentToMarket(
+    userId,
+    agentId,
+    agentName,
+    manifest?.description || '',
+    getMarketPublishTags(manifest),
+    'public'
+  );
 }
 
 // 兼容旧调用

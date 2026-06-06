@@ -32,10 +32,8 @@ export default function RegisterPage() {
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [validationError, setValidationError] = useState('');
-  const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
-    setMounted(true);
     if (token && user) {
       router.push('/');
     }
@@ -78,8 +76,6 @@ export default function RegisterPage() {
   }
 
   const displayError = validationError || error;
-
-  if (!mounted) return null;
 
   const bgImages = ['01', '02', '03', '04'];
   const floatingPositions = [
@@ -212,6 +208,7 @@ export default function RegisterPage() {
                 value={email}
                 onChange={setEmail}
                 placeholder="your@email.com"
+                type="email"
               />
             </div>
 
@@ -231,6 +228,7 @@ export default function RegisterPage() {
                 value={password}
                 onChange={setPassword}
                 placeholder="********"
+                type="password"
               />
             </div>
 
@@ -240,6 +238,7 @@ export default function RegisterPage() {
                 value={confirmPassword}
                 onChange={setConfirmPassword}
                 placeholder="********"
+                type="password"
               />
             </div>
 

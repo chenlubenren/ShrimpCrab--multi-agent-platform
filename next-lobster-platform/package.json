@@ -6,7 +6,10 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "smoke:mobile": "node scripts/smoke-mobile-ui.cjs",
+    "smoke:mobile:render": "node scripts/smoke-mobile-render.cjs",
+    "smoke:home-projects": "node scripts/smoke-home-projects.cjs"
   },
   "dependencies": {
     "@tailwindcss/typography": "^0.5.19",

@@ -3,6 +3,7 @@ import { ArchitectureAgent, ArchitectureNode, ArchitectureEdge } from '@/types';
 /** Standalone agent entries for the card UI (no node/edge data) */
 export interface ArchTemplate {
   id: string;
+  pattern?: string;
   name: string;
   nameCn: string;
   description: string;
@@ -12,6 +13,198 @@ export interface ArchTemplate {
   nodes?: ArchitectureNode[];
   edges?: ArchitectureEdge[];
 }
+
+export const WORKFLOW_MODE_TEMPLATES: ArchTemplate[] = [
+  {
+    id: 'mode-blank',
+    pattern: 'blank',
+    name: 'Blank Canvas',
+    nameCn: '空白画布',
+    description: 'Start from only an input and final output node',
+    descriptionCn: '只有起点和终点，适合完全自定义协作路径',
+    agents: [],
+    nodes: [
+      { id: 'mode-blank-start', type: 'startNode', data: { label: '用户输入' }, position: { x: 80, y: 240 } },
+      { id: 'mode-blank-end', type: 'endNode', data: { label: '最终输出' }, position: { x: 460, y: 240 } },
+    ],
+    edges: [],
+  },
+  {
+    id: 'mode-chain',
+    pattern: 'prompt-chain',
+    name: 'Prompt Chain',
+    nameCn: '串行链',
+    description: 'A predictable step-by-step workflow',
+    descriptionCn: '确定路径的逐步处理：分析 → 执行 → 汇总',
+    agents: [
+      { id: 'chain-analysis', name: '分析节点', role: '理解任务并拆解要求', kind: 'worker', inputs: ['用户任务'], outputs: ['任务拆解'] },
+      { id: 'chain-worker', name: '执行节点', role: '根据拆解完成主要工作', kind: 'worker', inputs: ['任务拆解'], outputs: ['执行结果'] },
+      { id: 'chain-summary', name: '汇总节点', role: '整理最终答复', kind: 'aggregator', inputs: ['执行结果'], outputs: ['最终结果'] },
+    ],
+    nodes: [
+      { id: 'chain-start', type: 'startNode', data: { label: '用户输入' }, position: { x: 60, y: 240 } },
+      { id: 'chain-analysis', type: 'agentNode', data: { label: '分析节点', role: '理解任务并拆解要求', kind: 'worker', isManager: false, inputs: ['用户任务'], outputs: ['任务拆解'], linkedLobster: null, isDeletable: true, agentId: 'chain-analysis' }, position: { x: 300, y: 220 } },
+      { id: 'chain-worker', type: 'agentNode', data: { label: '执行节点', role: '根据拆解完成主要工作', kind: 'worker', isManager: false, inputs: ['任务拆解'], outputs: ['执行结果'], linkedLobster: null, isDeletable: true, agentId: 'chain-worker' }, position: { x: 560, y: 220 } },
+      { id: 'chain-summary', type: 'agentNode', data: { label: '汇总节点', role: '整理最终答复', kind: 'aggregator', isManager: false, inputs: ['执行结果'], outputs: ['最终结果'], linkedLobster: null, isDeletable: true, agentId: 'chain-summary' }, position: { x: 820, y: 220 } },
+      { id: 'chain-end', type: 'endNode', data: { label: '最终输出' }, position: { x: 1080, y: 240 } },
+    ],
+    edges: [
+      { id: 'chain-e-start-analysis', source: 'chain-start', target: 'chain-analysis' },
+      { id: 'chain-e-analysis-worker', source: 'chain-analysis', target: 'chain-worker' },
+      { id: 'chain-e-worker-summary', source: 'chain-worker', target: 'chain-summary' },
+      { id: 'chain-e-summary-end', source: 'chain-summary', target: 'chain-end' },
+    ],
+  },
+  {
+    id: 'mode-routing',
+    pattern: 'routing',
+    name: 'Routing',
+    nameCn: '条件路由',
+    description: 'Classify the request and send it to the right path',
+    descriptionCn: '先判断任务类型，再进入不同处理路径',
+    agents: [
+      { id: 'route-router', name: '路由判断', role: '判断任务是否需要深入研究', kind: 'router', inputs: ['用户任务'], outputs: ['路由结论'] },
+      { id: 'route-fast', name: '快速处理', role: '处理简单任务', kind: 'worker', inputs: ['路由结论'], outputs: ['快速结果'] },
+      { id: 'route-deep', name: '深入处理', role: '处理复杂任务', kind: 'worker', inputs: ['路由结论'], outputs: ['深入结果'] },
+      { id: 'route-merge', name: '结果汇总', role: '汇总路由分支结果', kind: 'aggregator', inputs: ['分支结果'], outputs: ['最终结果'] },
+    ],
+    nodes: [
+      { id: 'route-start', type: 'startNode', data: { label: '用户输入' }, position: { x: 60, y: 260 } },
+      { id: 'route-router', type: 'agentNode', data: { label: '路由判断', role: '判断任务是否需要深入研究', kind: 'router', isManager: false, inputs: ['用户任务'], outputs: ['路由结论'], linkedLobster: null, isDeletable: true, agentId: 'route-router' }, position: { x: 300, y: 240 } },
+      { id: 'route-gate', type: 'conditionNode', data: { label: '是否复杂', description: '需要深入处理?' }, position: { x: 560, y: 230 } },
+      { id: 'route-fast', type: 'agentNode', data: { label: '快速处理', role: '处理简单任务', kind: 'worker', isManager: false, inputs: ['路由结论'], outputs: ['快速结果'], linkedLobster: null, isDeletable: true, agentId: 'route-fast' }, position: { x: 820, y: 110 } },
+      { id: 'route-deep', type: 'agentNode', data: { label: '深入处理', role: '处理复杂任务', kind: 'worker', isManager: false, inputs: ['路由结论'], outputs: ['深入结果'], linkedLobster: null, isDeletable: true, agentId: 'route-deep' }, position: { x: 820, y: 380 } },
+      { id: 'route-merge', type: 'agentNode', data: { label: '结果汇总', role: '汇总路由分支结果', kind: 'aggregator', isManager: false, inputs: ['分支结果'], outputs: ['最终结果'], linkedLobster: null, isDeletable: true, agentId: 'route-merge' }, position: { x: 1080, y: 240 } },
+      { id: 'route-end', type: 'endNode', data: { label: '最终输出' }, position: { x: 1340, y: 260 } },
+    ],
+    edges: [
+      { id: 'route-e-start-router', source: 'route-start', target: 'route-router' },
+      { id: 'route-e-router-gate', source: 'route-router', target: 'route-gate' },
+      { id: 'route-e-gate-deep', source: 'route-gate', target: 'route-deep', sourceHandle: 'yes', label: '是' },
+      { id: 'route-e-gate-fast', source: 'route-gate', target: 'route-fast', sourceHandle: 'no', label: '否' },
+      { id: 'route-e-fast-merge', source: 'route-fast', target: 'route-merge' },
+      { id: 'route-e-deep-merge', source: 'route-deep', target: 'route-merge' },
+      { id: 'route-e-merge-end', source: 'route-merge', target: 'route-end' },
+    ],
+  },
+  {
+    id: 'mode-parallel',
+    pattern: 'parallelization',
+    name: 'Parallelization',
+    nameCn: '并行协作',
+    description: 'Split one task into parallel specialist work',
+    descriptionCn: '多个专家同时处理同一任务的不同侧面，再汇总',
+    agents: [
+      { id: 'parallel-a', name: '方案 A', role: '从角度 A 分析', kind: 'worker', inputs: ['用户任务'], outputs: ['A 侧结论'] },
+      { id: 'parallel-b', name: '方案 B', role: '从角度 B 分析', kind: 'worker', inputs: ['用户任务'], outputs: ['B 侧结论'] },
+      { id: 'parallel-c', name: '方案 C', role: '从角度 C 分析', kind: 'worker', inputs: ['用户任务'], outputs: ['C 侧结论'] },
+      { id: 'parallel-merge', name: '汇总节点', role: '整合并行结果', kind: 'aggregator', inputs: ['A/B/C 侧结论'], outputs: ['综合结果'] },
+    ],
+    nodes: [
+      { id: 'parallel-start', type: 'startNode', data: { label: '用户输入' }, position: { x: 60, y: 260 } },
+      { id: 'parallel-a', type: 'agentNode', data: { label: '方案 A', role: '从角度 A 分析', kind: 'worker', isManager: false, inputs: ['用户任务'], outputs: ['A 侧结论'], linkedLobster: null, isDeletable: true, agentId: 'parallel-a' }, position: { x: 340, y: 80 } },
+      { id: 'parallel-b', type: 'agentNode', data: { label: '方案 B', role: '从角度 B 分析', kind: 'worker', isManager: false, inputs: ['用户任务'], outputs: ['B 侧结论'], linkedLobster: null, isDeletable: true, agentId: 'parallel-b' }, position: { x: 340, y: 260 } },
+      { id: 'parallel-c', type: 'agentNode', data: { label: '方案 C', role: '从角度 C 分析', kind: 'worker', isManager: false, inputs: ['用户任务'], outputs: ['C 侧结论'], linkedLobster: null, isDeletable: true, agentId: 'parallel-c' }, position: { x: 340, y: 440 } },
+      { id: 'parallel-merge', type: 'agentNode', data: { label: '汇总节点', role: '整合并行结果', kind: 'aggregator', isManager: false, inputs: ['A/B/C 侧结论'], outputs: ['综合结果'], linkedLobster: null, isDeletable: true, agentId: 'parallel-merge' }, position: { x: 700, y: 240 } },
+      { id: 'parallel-end', type: 'endNode', data: { label: '最终输出' }, position: { x: 980, y: 260 } },
+    ],
+    edges: [
+      { id: 'parallel-e-start-a', source: 'parallel-start', target: 'parallel-a' },
+      { id: 'parallel-e-start-b', source: 'parallel-start', target: 'parallel-b' },
+      { id: 'parallel-e-start-c', source: 'parallel-start', target: 'parallel-c' },
+      { id: 'parallel-e-a-merge', source: 'parallel-a', target: 'parallel-merge' },
+      { id: 'parallel-e-b-merge', source: 'parallel-b', target: 'parallel-merge' },
+      { id: 'parallel-e-c-merge', source: 'parallel-c', target: 'parallel-merge' },
+      { id: 'parallel-e-merge-end', source: 'parallel-merge', target: 'parallel-end' },
+    ],
+  },
+  {
+    id: 'mode-competition',
+    pattern: 'competition',
+    name: 'Competition',
+    nameCn: '多方案竞争',
+    description: 'Generate several candidate answers and judge the best',
+    descriptionCn: '多个 Agent 并行产出候选方案，再由评审节点选择最佳方案',
+    agents: [
+      { id: 'comp-a', name: '候选方案 A', role: '独立生成候选方案', kind: 'worker', inputs: ['用户任务'], outputs: ['候选 A'] },
+      { id: 'comp-b', name: '候选方案 B', role: '独立生成候选方案', kind: 'worker', inputs: ['用户任务'], outputs: ['候选 B'] },
+      { id: 'comp-judge', name: '方案评审', role: '根据标准选择最佳方案', kind: 'judge', inputs: ['候选 A', '候选 B'], outputs: ['最佳方案与理由'] },
+    ],
+    nodes: [
+      { id: 'comp-start', type: 'startNode', data: { label: '用户输入' }, position: { x: 60, y: 260 } },
+      { id: 'comp-a', type: 'agentNode', data: { label: '候选方案 A', role: '独立生成候选方案', kind: 'worker', isManager: false, inputs: ['用户任务'], outputs: ['候选 A'], linkedLobster: null, isDeletable: true, agentId: 'comp-a' }, position: { x: 340, y: 140 } },
+      { id: 'comp-b', type: 'agentNode', data: { label: '候选方案 B', role: '独立生成候选方案', kind: 'worker', isManager: false, inputs: ['用户任务'], outputs: ['候选 B'], linkedLobster: null, isDeletable: true, agentId: 'comp-b' }, position: { x: 340, y: 380 } },
+      { id: 'comp-judge', type: 'agentNode', data: { label: '方案评审', role: '根据标准选择最佳方案', kind: 'judge', isManager: false, inputs: ['候选 A', '候选 B'], outputs: ['最佳方案与理由'], linkedLobster: null, isDeletable: true, agentId: 'comp-judge' }, position: { x: 700, y: 240 } },
+      { id: 'comp-end', type: 'endNode', data: { label: '最佳方案' }, position: { x: 980, y: 260 } },
+    ],
+    edges: [
+      { id: 'comp-e-start-a', source: 'comp-start', target: 'comp-a' },
+      { id: 'comp-e-start-b', source: 'comp-start', target: 'comp-b' },
+      { id: 'comp-e-a-judge', source: 'comp-a', target: 'comp-judge' },
+      { id: 'comp-e-b-judge', source: 'comp-b', target: 'comp-judge' },
+      { id: 'comp-e-judge-end', source: 'comp-judge', target: 'comp-end' },
+    ],
+  },
+  {
+    id: 'mode-orchestrator',
+    pattern: 'orchestrator-workers',
+    name: 'Orchestrator Workers',
+    nameCn: '经理人编排',
+    description: 'A central orchestrator assigns and synthesizes worker results',
+    descriptionCn: '适合任务边界不清，需要中心节点拆解、分派、综合的场景',
+    agents: [
+      { id: 'orch-manager', name: '编排者', role: '拆解任务并综合结果', kind: 'orchestrator', isManager: true, inputs: ['用户任务'], outputs: ['任务分派'] },
+      { id: 'orch-worker-a', name: 'Worker A', role: '处理子任务 A', kind: 'worker', inputs: ['任务分派'], outputs: ['子结果 A'] },
+      { id: 'orch-worker-b', name: 'Worker B', role: '处理子任务 B', kind: 'worker', inputs: ['任务分派'], outputs: ['子结果 B'] },
+      { id: 'orch-synthesis', name: '综合节点', role: '整合 Worker 输出', kind: 'aggregator', inputs: ['子结果 A', '子结果 B'], outputs: ['综合结果'] },
+    ],
+    nodes: [
+      { id: 'orch-start', type: 'startNode', data: { label: '用户输入' }, position: { x: 60, y: 260 } },
+      { id: 'orch-manager', type: 'agentNode', data: { label: '编排者', role: '拆解任务并综合结果', kind: 'orchestrator', isManager: true, inputs: ['用户任务'], outputs: ['任务分派'], linkedLobster: null, isDeletable: true, agentId: 'orch-manager' }, position: { x: 320, y: 240 } },
+      { id: 'orch-worker-a', type: 'agentNode', data: { label: 'Worker A', role: '处理子任务 A', kind: 'worker', isManager: false, inputs: ['任务分派'], outputs: ['子结果 A'], linkedLobster: null, isDeletable: true, agentId: 'orch-worker-a' }, position: { x: 620, y: 120 } },
+      { id: 'orch-worker-b', type: 'agentNode', data: { label: 'Worker B', role: '处理子任务 B', kind: 'worker', isManager: false, inputs: ['任务分派'], outputs: ['子结果 B'], linkedLobster: null, isDeletable: true, agentId: 'orch-worker-b' }, position: { x: 620, y: 380 } },
+      { id: 'orch-synthesis', type: 'agentNode', data: { label: '综合节点', role: '整合 Worker 输出', kind: 'aggregator', isManager: false, inputs: ['子结果 A', '子结果 B'], outputs: ['综合结果'], linkedLobster: null, isDeletable: true, agentId: 'orch-synthesis' }, position: { x: 920, y: 240 } },
+      { id: 'orch-end', type: 'endNode', data: { label: '最终输出' }, position: { x: 1200, y: 260 } },
+    ],
+    edges: [
+      { id: 'orch-e-start-manager', source: 'orch-start', target: 'orch-manager' },
+      { id: 'orch-e-manager-a', source: 'orch-manager', target: 'orch-worker-a' },
+      { id: 'orch-e-manager-b', source: 'orch-manager', target: 'orch-worker-b' },
+      { id: 'orch-e-a-synthesis', source: 'orch-worker-a', target: 'orch-synthesis' },
+      { id: 'orch-e-b-synthesis', source: 'orch-worker-b', target: 'orch-synthesis' },
+      { id: 'orch-e-synthesis-end', source: 'orch-synthesis', target: 'orch-end' },
+    ],
+  },
+  {
+    id: 'mode-evaluator',
+    pattern: 'evaluator-optimizer',
+    name: 'Evaluator Optimizer',
+    nameCn: '评审优化循环',
+    description: 'Generate, evaluate, and loop back for improvement',
+    descriptionCn: '生成结果后评审；不通过则回到优化节点继续修改',
+    agents: [
+      { id: 'eval-generator', name: '生成器', role: '产出初稿', kind: 'worker', inputs: ['用户任务'], outputs: ['初稿'] },
+      { id: 'eval-reviewer', name: '评审器', role: '检查质量并给出意见', kind: 'evaluator', inputs: ['初稿'], outputs: ['评审意见'] },
+      { id: 'eval-optimizer', name: '优化器', role: '根据评审意见修改结果', kind: 'optimizer', inputs: ['评审意见'], outputs: ['优化稿'] },
+    ],
+    nodes: [
+      { id: 'eval-start', type: 'startNode', data: { label: '用户输入' }, position: { x: 60, y: 260 } },
+      { id: 'eval-generator', type: 'agentNode', data: { label: '生成器', role: '产出初稿', kind: 'worker', isManager: false, inputs: ['用户任务'], outputs: ['初稿'], linkedLobster: null, isDeletable: true, agentId: 'eval-generator' }, position: { x: 320, y: 240 } },
+      { id: 'eval-reviewer', type: 'agentNode', data: { label: '评审器', role: '检查质量并给出意见', kind: 'evaluator', isManager: false, inputs: ['初稿'], outputs: ['评审意见'], linkedLobster: null, isDeletable: true, agentId: 'eval-reviewer' }, position: { x: 600, y: 240 } },
+      { id: 'eval-gate', type: 'conditionNode', data: { label: '是否通过', description: '评审通过?' }, position: { x: 860, y: 230 } },
+      { id: 'eval-optimizer', type: 'agentNode', data: { label: '优化器', role: '根据评审意见修改结果', kind: 'optimizer', isManager: false, inputs: ['评审意见'], outputs: ['优化稿'], linkedLobster: null, isDeletable: true, agentId: 'eval-optimizer' }, position: { x: 860, y: 430 } },
+      { id: 'eval-end', type: 'endNode', data: { label: '最终输出' }, position: { x: 1140, y: 250 } },
+    ],
+    edges: [
+      { id: 'eval-e-start-generator', source: 'eval-start', target: 'eval-generator' },
+      { id: 'eval-e-generator-reviewer', source: 'eval-generator', target: 'eval-reviewer' },
+      { id: 'eval-e-reviewer-gate', source: 'eval-reviewer', target: 'eval-gate' },
+      { id: 'eval-e-gate-end', source: 'eval-gate', target: 'eval-end', sourceHandle: 'yes', label: '是' },
+      { id: 'eval-e-gate-optimizer', source: 'eval-gate', target: 'eval-optimizer', sourceHandle: 'no', label: '否' },
+      { id: 'eval-e-optimizer-reviewer', source: 'eval-optimizer', target: 'eval-reviewer' },
+    ],
+  },
+];
 
 export const ARCH_TEMPLATES: ArchTemplate[] = [
   // ── 1. 研究团队 ──────────────────────────────────────────────────────────────
@@ -178,6 +371,7 @@ export const ARCH_TEMPLATES: ArchTemplate[] = [
       { id: 'arch-三省-兵部', type: 'agentNode', data: { label: '兵部', role: '军政武备', isManager: false, inputs: ['执行指令'], outputs: ['军令'], linkedLobster: null, isDeletable: false, agentId: 'arch-三省-兵部' }, position: { x: 960, y: 360 } },
       { id: 'arch-三省-刑部', type: 'agentNode', data: { label: '刑部', role: '司法刑狱', isManager: false, inputs: ['执行指令'], outputs: ['判决'], linkedLobster: null, isDeletable: false, agentId: 'arch-三省-刑部' }, position: { x: 960, y: 460 } },
       { id: 'arch-三省-工部', type: 'agentNode', data: { label: '工部', role: '营建工程', isManager: false, inputs: ['执行指令'], outputs: ['工程计划'], linkedLobster: null, isDeletable: false, agentId: 'arch-三省-工部' }, position: { x: 960, y: 560 } },
+      { id: 'end-sz', type: 'endNode', data: { label: '办理完成' }, position: { x: 1260, y: 260 } },
     ],
     edges: [
       { id: 'e-sz-start', source: 'start-sz', target: 'arch-三省-中书' },
@@ -189,6 +383,12 @@ export const ARCH_TEMPLATES: ArchTemplate[] = [
       { id: 'e-sz-ss-bing', source: 'arch-三省-尚书', target: 'arch-三省-兵部' },
       { id: 'e-sz-ss-xing', source: 'arch-三省-尚书', target: 'arch-三省-刑部' },
       { id: 'e-sz-ss-gong', source: 'arch-三省-尚书', target: 'arch-三省-工部' },
+      { id: 'e-sz-libu-end', source: 'arch-三省-吏部', target: 'end-sz' },
+      { id: 'e-sz-hubu-end', source: 'arch-三省-户部', target: 'end-sz' },
+      { id: 'e-sz-lib-end', source: 'arch-三省-礼部', target: 'end-sz' },
+      { id: 'e-sz-bing-end', source: 'arch-三省-兵部', target: 'end-sz' },
+      { id: 'e-sz-xing-end', source: 'arch-三省-刑部', target: 'end-sz' },
+      { id: 'e-sz-gong-end', source: 'arch-三省-工部', target: 'end-sz' },
     ],
   },
 

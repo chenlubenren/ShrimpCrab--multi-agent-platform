@@ -3,8 +3,42 @@ import path from 'path';
 import crypto from 'crypto';
 import 'dotenv/config';
 
+function isWindowsDrivePath(filePath: string): boolean {
+  return /^[A-Za-z]:[\\/]/.test(filePath);
+}
+
+function isWslMountPath(filePath: string): boolean {
+  return /^\/mnt\/[A-Za-z](\/|$)/.test(filePath);
+}
+
+function windowsPathToWsl(filePath: string): string {
+  return filePath
+    .replace(/^([A-Za-z]):[\\/]/, (_match, letter) => `/mnt/${String(letter).toLowerCase()}/`)
+    .replace(/\\/g, '/');
+}
+
+function wslPathToWindows(filePath: string): string {
+  return filePath
+    .replace(/^\/mnt\/([A-Za-z])(?:\/|$)/, (_match, letter) => `${String(letter).toUpperCase()}:\\`)
+    .replace(/\//g, '\\');
+}
+
+export function resolveStoredPath(filePath: string): string {
+  if (process.platform === 'win32') {
+    const hostPath = isWslMountPath(filePath)
+      ? wslPathToWindows(filePath)
+      : filePath.replace(/\//g, '\\');
+    return path.isAbsolute(hostPath) ? path.normalize(hostPath) : path.resolve(hostPath);
+  }
+
+  const hostPath = isWindowsDrivePath(filePath)
+    ? windowsPathToWsl(filePath)
+    : filePath.replace(/\\/g, '/');
+  return path.posix.isAbsolute(hostPath) ? path.posix.normalize(hostPath) : path.resolve(hostPath);
+}
+
 // Default workspace root (can be overridden by env)
-const DEFAULT_WORKSPACE_ROOT = process.env.WORKSPACE_ROOT || path.join(process.cwd(), 'data', 'workspaces');
+const DEFAULT_WORKSPACE_ROOT = resolveStoredPath(process.env.WORKSPACE_ROOT || path.join(process.cwd(), 'data', 'workspaces'));
 const MARKET_ROOT = path.join(DEFAULT_WORKSPACE_ROOT, 'market');
 const USERS_ROOT = path.join(DEFAULT_WORKSPACE_ROOT, 'users');
 const RUNTIME_ROOT = path.join(DEFAULT_WORKSPACE_ROOT, 'runtime');
@@ -38,6 +72,20 @@ export function getUserAgentsRoot(userId: string): string {
   const agentsRoot = path.join(getUserWorkspaceRoot(userId), 'agents');
   ensureDir(agentsRoot);
   return agentsRoot;
+}
+
+export function getUserProjectsRoot(userId: string): string {
+  const projectsRoot = path.join(getUserWorkspaceRoot(userId), 'projects');
+  ensureDir(projectsRoot);
+  return projectsRoot;
+}
+
+export function getProjectWorkspacePath(userId: string, projectId: string): string {
+  const projectRoot = path.join(getUserProjectsRoot(userId), projectId);
+  ensureDir(projectRoot);
+  const workspaceDir = path.join(projectRoot, 'workspace');
+  ensureDir(workspaceDir);
+  return workspaceDir;
 }
 
 export function getAgentWorkspacePath(userId: string, agentInstanceId: string): string {
@@ -90,6 +138,16 @@ export function getTeamRuntimePath(userId: string, teamId: string, runId: string
   const logsDir = path.join(teamRoot, 'logs');
   ensureDir(logsDir);
   return teamRoot;
+}
+
+export function getTeaPartyAgentRuntimePath(userId: string, agentInstanceId: string): { workspacePath: string; stateDir: string } {
+  const runtimeRoot = path.join(RUNTIME_ROOT, 'tea-party', userId, agentInstanceId);
+  ensureDir(runtimeRoot);
+  const workspacePath = path.join(runtimeRoot, 'workspace');
+  const stateDir = path.join(runtimeRoot, 'state');
+  ensureDir(workspacePath);
+  ensureDir(stateDir);
+  return { workspacePath, stateDir };
 }
 
 // ==================== File Operations ====================

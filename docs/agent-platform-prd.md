@@ -6,7 +6,7 @@
 
 ## 1. 背景与目标
 
-当前项目已经有龙虾市场、我的龙虾窝、上传、单 Agent 对话、架构编排等前端雏形。下一阶段目标是把这些页面背后的 mock 数据替换成真实的 Agent workspace 管理、OpenClaw/A2A 调度与用户体系。
+当前项目已经有龙虾市场、我的龙虾窝、上传、单 Agent 对话、架构编排等前端雏形。下一阶段目标是继续完善这些页面背后的真实 Agent workspace 管理、OpenClaw/A2A 调度与用户体系。
 
 平台分为两种模式：
 
@@ -543,7 +543,7 @@ POST /internal/artifacts
 | `src/app/architectures/create/*` | 创建团队 | 生成 team manifest，绑定用户已有 agents |
 | `src/app/architectures/mine/page.tsx` | 我的团队列表 | 接 `/api/teams` |
 | `src/app/architectures/mine/[id]/page.tsx` | 团队运行 | 创建 run，展示 step/event/artifact |
-| `src/lib/api.ts` | mock API fallback | 逐步替换为真实 API client |
+| `src/lib/api.ts` | 真实 API client | 继续补齐错误处理、重试与离线空态 |
 | `src/lib/openclaw.ts` | OpenClaw PoC client | 下沉到服务端 adapter |
 
 ## 11. 桌面端模式预留
@@ -580,7 +580,7 @@ POST /internal/artifacts
 
 - 修正类型命名：Lobster -> AgentInstance 可逐步兼容。
 - 增加 manifest、team、run 的 TypeScript 类型。
-- 页面仍可用 mock 数据。
+- 页面应展示真实数据或明确空态，不再使用本地假数据伪装接口成功。
 
 ### M1：用户与真实存储
 

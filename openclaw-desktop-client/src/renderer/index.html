@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>OpenClaw Desktop</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <aside class="sidebar">
+        <div class="brand">OpenClaw</div>
+        <button class="nav active">本地 Agent 导入</button>
+        <button class="nav" id="open-web">打开网页端</button>
+        <button class="nav" data-href="http://localhost:3000/projects">我的项目</button>
+        <button class="nav" data-href="http://localhost:3000/architectures/mine">我的团队</button>
+      </aside>
+
+      <section class="workspace">
+        <header class="hero">
+          <div>
+            <p class="eyebrow">DESKTOP CLIENT</p>
+            <h1>本地 Agent 导入</h1>
+          </div>
+          <button id="scan" class="pixel-button">扫描用户目录</button>
+        </header>
+
+        <section class="scan-strip" aria-label="支持的本地 Agent 类型">
+          <div class="scan-type">
+            <strong>Claude Code</strong>
+            <span>.claude / agents</span>
+          </div>
+          <div class="scan-type">
+            <strong>Codex</strong>
+            <span>.codex / AGENTS.md</span>
+          </div>
+          <div class="scan-type">
+            <strong>OpenCode</strong>
+            <span>.opencode / opencode.json</span>
+          </div>
+          <div class="scan-type">
+            <strong>Hermes</strong>
+            <span>.hermes / hermes.yaml</span>
+          </div>
+          <div class="scan-type openclaw-type">
+            <strong>OpenClaw</strong>
+            <span>~/.openclaw 与 data/workspaces</span>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-title">
+            <span>扫描结果</span>
+            <span id="summary">尚未扫描</span>
+          </div>
+          <div id="results" class="results"></div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-title">
+            <span>运行时预检</span>
+            <button id="runtime-refresh" class="title-button">重新检查</button>
+          </div>
+          <div class="runtime-summary">
+            <div class="runtime-stat ready">
+              <span>可运行</span>
+              <strong id="runtime-ready">--</strong>
+            </div>
+            <div class="runtime-stat danger">
+              <span>缺 CLI</span>
+              <strong id="runtime-missing-cli">--</strong>
+            </div>
+            <div class="runtime-stat warn">
+              <span>缺供应商</span>
+              <strong id="runtime-missing-provider">--</strong>
+            </div>
+          </div>
+          <div id="runtime-health" class="runtime-grid">
+            <div class="empty">填写后端地址和 Auth Token 后，可以检查本机 CLI 与供应商配置。</div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-title">
+            <span>导入设置</span>
+            <span>连接后端 /api/upload</span>
+          </div>
+          <div class="form-grid">
+            <label>
+              后端地址
+              <input id="backend-url" value="http://localhost:3002" />
+            </label>
+            <label>
+              Auth Token
+              <input id="auth-token" type="password" placeholder="登录后粘贴 token" />
+            </label>
+            <label>
+              Agent 名称
+              <input id="agent-name" placeholder="选择本地 Agent 后自动填充" />
+            </label>
+            <label>
+              Agent 简介
+              <textarea id="agent-description" placeholder="可选：导入到我的 Agent 窝后展示"></textarea>
+            </label>
+          </div>
+          <div class="import-actions">
+            <button id="import-agent" class="pixel-button secondary" disabled>导入到我的 Agent 窝</button>
+            <div id="import-status" class="import-status">先扫描并选择一个本地 Agent。</div>
+          </div>
+          <div id="skip-summary" class="skip-summary-wrap"></div>
+          <p class="hint">
+            桌面端会读取本地文件夹并调用后端上传接口。Token 可先从网页端登录态复制，后续桌面端登录接管后会自动同步。
+          </p>
+        </section>
+      </section>
+    </main>
+
+    <script src="./app.js"></script>
+  </body>
+</html>

@@ -176,6 +176,15 @@ function stripRootPrefix(paths: string[]): string[] {
   return paths.map(normalizePath);
 }
 
+function hasPathSegment(paths: string[], segment: string): boolean {
+  const needle = segment.toLowerCase();
+  return paths.some((p) =>
+    normalizePath(p)
+      .split('/')
+      .some((part) => part.toLowerCase() === needle)
+  );
+}
+
 export interface DetectionResult {
   detected: AgentPlatformType | null;
   confidence: 'high' | 'low' | 'none';
@@ -189,10 +198,23 @@ export interface DetectionResult {
  */
 function checkUniqueIdentifiers(paths: string[]): { type: Exclude<AgentPlatformType, 'unknown'>; reason: string } | null {
   const normalized = paths.map(normalizePath);
+  const stripped = stripRootPrefix(normalized);
+  const pathsToCheck = Array.from(new Set([...normalized, ...stripped]));
+
+  // Agent config folders are the strongest signal and must win over generic
+  // project files such as AGENTS.md or agent.manifest.json.
+  const hasClaudeDir = hasPathSegment(pathsToCheck, '.claude');
+  const hasCodexDir = hasPathSegment(pathsToCheck, '.codex');
+  if (hasClaudeDir && !hasCodexDir) {
+    return { type: 'claude-code', reason: '.claude directory found' };
+  }
+  if (hasCodexDir && !hasClaudeDir) {
+    return { type: 'codex', reason: '.codex directory found' };
+  }
 
   // OpenCode: Check for root folder named "opencode" (highest priority for OpenCode)
   // This must be checked BEFORE OpenClaw bootstrap files
-  const hasOpenCodeRoot = normalized.some(p => {
+  const hasOpenCodeRoot = pathsToCheck.some(p => {
     const parts = p.split('/');
     return parts.length >= 1 && parts[0].toLowerCase() === 'opencode';
   });
@@ -201,17 +223,17 @@ function checkUniqueIdentifiers(paths: string[]): { type: Exclude<AgentPlatformT
   }
 
   // Claude Code unique
-  if (normalized.some(p => /^\.claude\/settings\.json$/i.test(p) || /^\.claude\/rules\//i.test(p))) {
+  if (pathsToCheck.some(p => /^\.claude\/settings\.json$/i.test(p) || /^\.claude\/rules\//i.test(p))) {
     return { type: 'claude-code', reason: '.claude/settings.json or .claude/rules/ found' };
   }
 
   // Codex unique
-  if (normalized.some(p => /(^|\/)codex\.toml$/i.test(p) || /(^|\/)AGENTS\.override\.md$/i.test(p))) {
+  if (pathsToCheck.some(p => /(^|\/)codex\.toml$/i.test(p) || /(^|\/)AGENTS\.override\.md$/i.test(p))) {
     return { type: 'codex', reason: 'codex.toml or AGENTS.override.md found' };
   }
 
   // OpenCode: .opencode/agents/ directory (fallback check)
-  if (normalized.some(p => /^\.opencode\/agents\//i.test(p))) {
+  if (pathsToCheck.some(p => /^\.opencode\/agents\//i.test(p))) {
     return { type: 'opencode', reason: '.opencode/agents/ directory found' };
   }
 
@@ -219,18 +241,18 @@ function checkUniqueIdentifiers(paths: string[]): { type: Exclude<AgentPlatformT
   // NOTE: Only check these if we haven't already identified OpenCode
   const openclawUniqueFiles = ['SOUL.md', 'IDENTITY.md', 'BOOTSTRAP.md', 'BOOT.md', 'HEARTBEAT.md'];
   for (const file of openclawUniqueFiles) {
-    if (normalized.some(p => new RegExp(`(^|/)` + file.replace('.', '\\.') + `$`, 'i').test(p))) {
+    if (pathsToCheck.some(p => new RegExp(`(^|/)` + file.replace('.', '\\.') + `$`, 'i').test(p))) {
       return { type: 'openclaw', reason: `${file} (OpenClaw bootstrap file) found` };
     }
   }
 
   // Hermes unique
-  if (normalized.some(p => /^\.hermes\/memories\//i.test(p) || /^\.hermes\/cron\//i.test(p) || /^\.hermes\/sessions\//i.test(p))) {
+  if (pathsToCheck.some(p => /^\.hermes\/memories\//i.test(p) || /^\.hermes\/cron\//i.test(p) || /^\.hermes\/sessions\//i.test(p))) {
     return { type: 'hermes', reason: '.hermes/memories/, cron/, or sessions/ found' };
   }
 
   // Additional Hermes indicator: .hermes/ with config.yaml pattern
-  if (normalized.some(p => /^\.hermes\/[^/]+\.yaml$/i.test(p) && !p.includes('hermes.yaml'))) {
+  if (pathsToCheck.some(p => /^\.hermes\/[^/]+\.yaml$/i.test(p) && !p.includes('hermes.yaml'))) {
     return { type: 'hermes', reason: 'YAML config in .hermes/ directory' };
   }
 
@@ -240,7 +262,7 @@ function checkUniqueIdentifiers(paths: string[]): { type: Exclude<AgentPlatformT
 export function detectAgentTypeFromPaths(filePaths: string[]): DetectionResult {
   const normalized = filePaths.map(normalizePath);
   
-  // Phase 1: Check for 100% unique identifiers FIRST (on original paths, before stripping)
+  // Phase 1: Check for 100% unique identifiers FIRST.
   const uniqueMatch = checkUniqueIdentifiers(normalized);
   if (uniqueMatch) {
     return {

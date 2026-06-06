@@ -21,18 +21,21 @@ import {
   useEdgesState,
   MarkerType,
   getSmoothStepPath,
+  type ReactFlowInstance,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { motion } from 'framer-motion';
 import { PixelButton } from '@/components/ui/PixelButton';
-import { ArchitectureAgent, Lobster } from '@/types';
+import { ArchitectureAgent, Lobster, WorkflowAgentKind } from '@/types';
 import { useStore } from '@/store/useStore';
 import { LobsterSprite } from '@/components/lobster/LobsterSprite';
 import type { ArchTemplate } from '@/lib/archTemplates';
+import { getConnectionValidationError } from '@/lib/workflowDsl';
 
 interface AgentNodeData {
   label: string;
   role: string;
+  kind?: WorkflowAgentKind;
   isManager: boolean;
   inputs: string[];
   outputs: string[];
@@ -55,14 +58,12 @@ export function AgentNode({ data, selected }: NodeProps<Node<AgentNodeData> >) {
       `}
       style={{ boxShadow: '4px 4px 0px 0px #101010' }}
     >
-      {/* Output handle (right) */}
-      {data.outputs && data.outputs.length > 0 && (
-        <Handle
-          type="source"
-          position={Position.Right}
-          style={{ background: '#22c55e', border: '3px solid #101010', width: 14, height: 14 }}
-        />
-      )}
+      {/* Output handle (right). Always visible: port labels are metadata, not connection availability. */}
+      <Handle
+        type="source"
+        position={Position.Right}
+        style={{ background: '#22c55e', border: '3px solid #101010', width: 14, height: 14 }}
+      />
 
       <div className="flex flex-col items-center gap-1">
         {data.isManager && (
@@ -74,6 +75,11 @@ export function AgentNode({ data, selected }: NodeProps<Node<AgentNodeData> >) {
         <span className="font-pixel text-xs text-pixel-white/70 text-center">
           {data.role || '未设置角色'}
         </span>
+        {data.kind && (
+          <span className="bg-pixel-black/20 text-pixel-white/80 px-2 py-0.5 font-pixel text-[10px]">
+            {AGENT_KIND_OPTIONS.find((option) => option.value === data.kind)?.label ?? data.kind}
+          </span>
+        )}
         {data.linkedLobster && (
           <span className="bg-pixel-black/30 text-pixel-white/80 px-2 py-0.5 font-pixel text-xs">
             🟢 {data.linkedLobster.name}
@@ -82,13 +88,11 @@ export function AgentNode({ data, selected }: NodeProps<Node<AgentNodeData> >) {
       </div>
 
       {/* Input handle (left) */}
-      {data.inputs && data.inputs.length > 0 && (
-        <Handle
-          type="target"
-          position={Position.Left}
-          style={{ background: '#3b82f6', border: '3px solid #101010', width: 14, height: 14 }}
-        />
-      )}
+      <Handle
+        type="target"
+        position={Position.Left}
+        style={{ background: '#3b82f6', border: '3px solid #101010', width: 14, height: 14 }}
+      />
     </div>
   );
 }
@@ -410,16 +414,33 @@ const NODE_TEMPLATES: NodeTemplate[] = [
   { type: 'endNode', label: '终点', color: 'bg-pixel-black', description: '流程终点' },
 ];
 
+const AGENT_KIND_OPTIONS: Array<{ value: WorkflowAgentKind; label: string }> = [
+  { value: 'worker', label: '执行者' },
+  { value: 'router', label: '路由器' },
+  { value: 'aggregator', label: '汇总者' },
+  { value: 'judge', label: '评审者' },
+  { value: 'orchestrator', label: '编排者' },
+  { value: 'evaluator', label: '评估者' },
+  { value: 'optimizer', label: '优化者' },
+];
+
 interface NodeCanvasProps {
   onAgentsChange: (agents: ArchitectureAgent[]) => void;
   /** Report raw nodes/edges changes back to parent (for saving to architecture) */
   onGraphChange?: (nodes: Node[], edges: Edge[]) => void;
   /** If provided, use these nodes/edges as the initial canvas state instead of the blank default */
   initialTemplate?: ArchTemplate | null;
+  workflowTemplates?: ArchTemplate[];
+  activeTemplateId?: string;
+  activeTemplateName?: string;
+  onSelectTemplate?: (template: ArchTemplate) => void;
 }
 
-const MANAGER_NODE_ID = 'agent-manager';
-const MANAGER_LOBSTER_ID = 'lobster-001';
+function getConcreteAgentId(lobster?: Lobster | null): string | undefined {
+  const id = lobster?.id?.trim();
+  if (!id || /^(lobster|agent|arch)-/i.test(id)) return undefined;
+  return id;
+}
 
 function buildAgentsFromNodes(nodes: Node[]): ArchitectureAgent[] {
   return nodes
@@ -427,22 +448,25 @@ function buildAgentsFromNodes(nodes: Node[]): ArchitectureAgent[] {
     .map((n) => {
       const d = n.data as AgentNodeData;
       return {
-        id: d.agentId,
+        id: n.id,
+        nodeId: n.id,
         name: d.label || `成员`,
         role: d.role || '成员',
+        kind: d.kind,
         status: 'standby' as const,
         isManager: d.isManager,
         inputs: d.inputs ?? [],
         outputs: d.outputs ?? [],
-        linkedLobsterId: d.linkedLobster?.id,
+        linkedLobsterId: getConcreteAgentId(d.linkedLobster),
         openclawPath: d.linkedLobster?.openclawPath,
         openclawPort: d.linkedLobster?.openclawPort,
       };
     });
 }
 
-// Default canvas: start → manager
+// Default canvas: start/end only. Users choose a mode or add agents explicitly.
 const START_NODE_ID = 'node-start';
+const END_NODE_ID = 'node-end';
 
 const defaultNodes: Node[] = [
   {
@@ -452,43 +476,24 @@ const defaultNodes: Node[] = [
     data: { label: '用户输入' },
   },
   {
-    id: MANAGER_NODE_ID,
-    type: 'agentNode',
-    position: { x: 340, y: 220 },
-    data: {
-      label: '经理人',
-      role: '任务分配与协调',
-      isManager: true,
-      inputs: ['用户输入'],
-      outputs: ['任务分配'],
-      agentId: MANAGER_NODE_ID,
-      isDeletable: false,
-      linkedLobster: {
-        id: 'lobster-001',
-        name: 'Manager',
-        role: 'OpenClaw Main Agent',
-        status: 'idle',
-        createdAt: '2026-03-01',
-        conversations: [],
-        openclawPath: 'C:\\Users\\Administrator\\.openclaw\\workspace',
-        openclawPort: 3001,
-        isConnected: true,
-      } as Lobster,
-    },
+    id: END_NODE_ID,
+    type: 'endNode',
+    position: { x: 420, y: 240 },
+    data: { label: '最终输出' },
   },
 ];
 
-const defaultEdges: Edge[] = [
-  {
-    id: 'edge-start-manager',
-    source: START_NODE_ID,
-    target: MANAGER_NODE_ID,
-    type: 'dataFlow',
-    markerEnd: { type: MarkerType.ArrowClosed, width: 18, height: 18 },
-  },
-];
+const defaultEdges: Edge[] = [];
 
-export default function NodeCanvas({ onAgentsChange, onGraphChange, initialTemplate }: NodeCanvasProps) {
+export default function NodeCanvas({
+  onAgentsChange,
+  onGraphChange,
+  initialTemplate,
+  workflowTemplates = [],
+  activeTemplateId,
+  activeTemplateName,
+  onSelectTemplate,
+}: NodeCanvasProps) {
   // Convert template nodes (ArchitectureNode[]) to ReactFlow Node[] with position
   const templateNodes: Node[] = initialTemplate?.nodes?.map((n) => ({
     id: n.id,
@@ -523,11 +528,22 @@ export default function NodeCanvas({ onAgentsChange, onGraphChange, initialTempl
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
   const [showLobsterPicker, setShowLobsterPicker] = useState(false);
   const [showAddMenu, setShowAddMenu] = useState(false);
+  const [showTemplateMenu, setShowTemplateMenu] = useState(false);
 
   const { lobsters } = useStore();
 
   const selectedNode = nodes.find((n) => n.id === selectedNodeId) ?? null;
   const selectedNodeData = selectedNode?.data as AgentNodeData | ConditionNodeData | undefined;
+
+  const applyInitialViewport = useCallback((instance: ReactFlowInstance) => {
+    window.requestAnimationFrame(() => {
+      void (async () => {
+        await instance.fitView({ padding: 0.42, duration: 0 });
+        await instance.zoomOut({ duration: 0 });
+        await instance.zoomOut({ duration: 0 });
+      })();
+    });
+  }, []);
 
   // Sync agents to parent when template is loaded
   useEffect(() => {
@@ -548,6 +564,10 @@ export default function NodeCanvas({ onAgentsChange, onGraphChange, initialTempl
     [onAgentsChange]
   );
 
+  useEffect(() => {
+    syncAgents(nodes);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Stable delete-edge handler
   const handleEdgeDelete = useCallback(
     (edgeId: string) => {
@@ -558,9 +578,9 @@ export default function NodeCanvas({ onAgentsChange, onGraphChange, initialTempl
   );
 
   // Inject onDelete into edge data（sourceHandle 在边上由 React Flow / 保存逻辑维护）
-  const edgesWithCallbacks = useMemo(
+  const edgesWithCallbacks = useMemo<Edge[]>(
     () =>
-      edges.map((edge) => ({
+      edges.map((edge): Edge => ({
         ...edge,
         data: { ...edge.data, onDelete: handleEdgeDelete },
       })),
@@ -569,10 +589,15 @@ export default function NodeCanvas({ onAgentsChange, onGraphChange, initialTempl
 
   const onConnect = useCallback(
     (connection: Connection) => {
+      const validationError = getConnectionValidationError(nodes, edges, connection);
+      if (validationError) return;
+
+      const edgeId = `edge-${connection.source}-${connection.sourceHandle ?? 'out'}-${connection.target}-${connection.targetHandle ?? 'in'}`;
       setEdges((eds) =>
         addEdge(
           {
             ...connection,
+            id: edgeId,
             type: 'dataFlow',
             markerEnd: { type: MarkerType.ArrowClosed, width: 18, height: 18 },
             data: { sourceHandle: connection.sourceHandle ?? undefined },
@@ -581,7 +606,12 @@ export default function NodeCanvas({ onAgentsChange, onGraphChange, initialTempl
         )
       );
     },
-    [setEdges]
+    [nodes, edges, setEdges]
+  );
+
+  const isValidConnection = useCallback(
+    (connection: Connection | Edge) => !getConnectionValidationError(nodes, edges, connection),
+    [nodes, edges]
   );
 
   const onNodeClick = useCallback(
@@ -604,6 +634,7 @@ export default function NodeCanvas({ onAgentsChange, onGraphChange, initialTempl
     setSelectedNodeId(null);
     setSelectedEdgeId(null);
     setShowAddMenu(false);
+    setShowTemplateMenu(false);
   }, []);
 
   // Update any field on a node
@@ -632,6 +663,7 @@ export default function NodeCanvas({ onAgentsChange, onGraphChange, initialTempl
         newData = {
           label: `成员 ${nodes.filter((n) => n.type === 'agentNode').length + 1}`,
           role: '成员',
+          kind: 'worker',
           isManager: false,
           inputs: ['输入'],
           outputs: ['输出'],
@@ -664,8 +696,20 @@ export default function NodeCanvas({ onAgentsChange, onGraphChange, initialTempl
       });
       setSelectedNodeId(id);
       setShowAddMenu(false);
+      setShowTemplateMenu(false);
     },
     [nodes, setNodes, syncAgents]
+  );
+
+  const handleSelectTemplate = useCallback(
+    (template: ArchTemplate) => {
+      onSelectTemplate?.(template);
+      setShowTemplateMenu(false);
+      setShowAddMenu(false);
+      setSelectedNodeId(null);
+      setSelectedEdgeId(null);
+    },
+    [onSelectTemplate]
   );
 
   const handleDeleteNode = useCallback(() => {
@@ -716,19 +760,23 @@ export default function NodeCanvas({ onAgentsChange, onGraphChange, initialTempl
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
           onConnect={onConnect}
+          isValidConnection={isValidConnection}
           onNodeClick={onNodeClick}
           onEdgeClick={onEdgeClick}
           onPaneClick={onPaneClick}
           nodeTypes={nodeTypes}
           edgeTypes={edgeTypes}
-          fitView
-          defaultViewport={{ x: 30, y: 60, zoom: 0.36 }}
+          onInit={applyInitialViewport}
+          fitViewOptions={{ padding: 0.42, maxZoom: 0.68 }}
+          defaultViewport={{ x: 24, y: 48, zoom: 0.3 }}
+          minZoom={0.18}
           className="font-pixel"
         >
           <Background color="#101010" gap={20} />
           <Controls className="!bg-pixel-white !border-pixel-black !shadow-none" />
           <MiniMap
             className="!bg-pixel-white !border-pixel-black"
+            style={{ width: 120, height: 86 }}
             nodeColor={(node) => {
               if (node.type === 'conditionNode') return '#a855f7';
               if (node.type === 'startNode') return '#22c55e';
@@ -741,17 +789,25 @@ export default function NodeCanvas({ onAgentsChange, onGraphChange, initialTempl
         </ReactFlow>
 
         {/* Toolbar */}
-        <div className="absolute top-3 left-3 flex gap-2 z-10">
+        <div className="absolute top-3 left-3 flex items-start gap-2 z-10">
+          <div className="flex flex-col gap-2">
           {/* Add node menu */}
           <div className="relative">
-            <PixelButton onClick={() => setShowAddMenu(!showAddMenu)} variant="secondary" size="sm">
+            <PixelButton
+              onClick={() => {
+                setShowAddMenu((open) => !open);
+                setShowTemplateMenu(false);
+              }}
+              variant="secondary"
+              size="sm"
+            >
               + 添加节点
             </PixelButton>
             {showAddMenu && (
               <motion.div
                 initial={{ opacity: 0, y: -4 }}
                 animate={{ opacity: 1, y: 0 }}
-                className="absolute top-full left-0 mt-1 bg-pixel-white border-3 border-pixel-black w-48 z-20"
+                className="absolute top-full left-0 mt-1 bg-pixel-white border-3 border-pixel-black w-48 z-30"
                 style={{ boxShadow: '4px 4px 0px 0px #101010' }}
               >
                 {NODE_TEMPLATES.map((t) => (
@@ -766,6 +822,61 @@ export default function NodeCanvas({ onAgentsChange, onGraphChange, initialTempl
                   </button>
                 ))}
               </motion.div>
+            )}
+          </div>
+
+            {workflowTemplates.length > 0 && onSelectTemplate && (
+              <div className="relative">
+                <PixelButton
+                  onClick={() => {
+                    setShowTemplateMenu((open) => !open);
+                    setShowAddMenu(false);
+                  }}
+                  variant="secondary"
+                  size="sm"
+                >
+                  使用参考模板
+                </PixelButton>
+                {showTemplateMenu && (
+                  <motion.div
+                    initial={{ opacity: 0, y: -4 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="absolute top-full left-0 mt-1 w-[560px] max-w-[calc(100vw-2rem)] bg-pixel-white border-3 border-pixel-black p-3 z-30"
+                    style={{ boxShadow: '4px 4px 0px 0px #101010' }}
+                    onClick={(event) => event.stopPropagation()}
+                  >
+                    <div className="flex items-center justify-between gap-3 mb-3">
+                      <div className="font-pixel text-sm text-pixel-black">协作模式参考模板</div>
+                      <div className="px-2 py-1 border-2 border-pixel-black bg-pixel-gray/20 font-pixel text-[10px] text-pixel-black">
+                        {activeTemplateName || '导入已有团队'}
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      {workflowTemplates.map((template) => {
+                        const selected = activeTemplateId === template.id;
+                        return (
+                          <button
+                            key={template.id}
+                            type="button"
+                            onClick={() => handleSelectTemplate(template)}
+                            className={`min-h-[86px] border-3 border-pixel-black p-3 text-left transition-colors ${
+                              selected
+                                ? 'bg-pixel-blue text-pixel-white'
+                                : 'bg-pixel-white text-pixel-black hover:bg-pixel-yellow/30'
+                            }`}
+                            style={{ boxShadow: selected ? 'none' : '3px 3px 0px 0px #101010' }}
+                          >
+                            <div className="font-pixel text-xs leading-tight">{template.nameCn}</div>
+                            <div className={`font-pixel text-[10px] mt-2 leading-snug ${selected ? 'text-pixel-white/75' : 'text-pixel-black/50'}`}>
+                              {template.descriptionCn}
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </motion.div>
+                )}
+              </div>
             )}
           </div>
 
@@ -872,6 +983,21 @@ export default function NodeCanvas({ onAgentsChange, onGraphChange, initialTempl
                         onChange={(e) => updateNodeData(selectedNodeId!, 'role', e.target.value)}
                         className="w-full bg-pixel-white border-3 border-pixel-black font-pixel text-sm px-3 py-2 focus:outline-none focus:border-pixel-blue"
                       />
+                    </div>
+
+                    <div>
+                      <label className="font-pixel text-xs text-pixel-black/60 block mb-1">协作身份</label>
+                      <select
+                        value={data.kind ?? 'worker'}
+                        onChange={(e) => updateNodeData(selectedNodeId!, 'kind', e.target.value as WorkflowAgentKind)}
+                        className="w-full bg-pixel-white border-3 border-pixel-black font-pixel text-sm px-3 py-2 focus:outline-none focus:border-pixel-blue"
+                      >
+                        {AGENT_KIND_OPTIONS.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
                     </div>
 
                     {/* Inputs */}

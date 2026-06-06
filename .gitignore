@@ -11,6 +11,9 @@ dist/
 
 # Testing
 coverage/
+.playwright-cli/
+.tmp-verify/
+output/
 
 # Misc
 .DS_Store
@@ -43,3 +46,7 @@ next-env.d.ts
 # Logs
 logs
 *.log
+
+# Local archives
+openclaw_project_*.zip
+openclaw_project_*.tar.gz

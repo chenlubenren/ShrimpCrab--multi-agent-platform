@@ -1,0 +1,11 @@
+<svg width="256" height="256" viewBox="0 0 256 256" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+    <feDropShadow dx="0" dy="3" stdDeviation="4" flood-color="#000" flood-opacity=".22"/>
+  </filter>
+  <g filter="url(#shadow)">
+    <path d="M44 42h168v50h22v78h-22v44h-32v-60h-32v60h-38v-60H78v60H46v-88H20V92h24V42Z" fill="#D97757"/>
+    <path d="M20 92h24v34H20V92Zm192 0h24v34h-24V92Z" fill="#D97757"/>
+    <path d="M78 86l30 13v17L78 129v-20l15-2-15-2V86Zm100 0-30 13v17l30 13v-20l-15-2 15-2V86Z" fill="#070707"/>
+    <path d="M44 42h168v8H52v164h-8V42Z" fill="#F2B39B" opacity=".35"/>
+  </g>
+</svg>

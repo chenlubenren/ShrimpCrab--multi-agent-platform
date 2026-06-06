@@ -6,185 +6,140 @@ import { useRouter } from 'next/navigation';
 import { PixelButton } from '@/components/ui/PixelButton';
 import { PixelInput } from '@/components/ui/PixelInput';
 import { BackButton } from '@/components/ui/BackButton';
+import { adoptOfficialLobster } from '@/lib/api';
+import { useAuthStore } from '@/store/useAuthStore';
 import { useStore } from '@/store/useStore';
-import { Lobster } from '@/types';
 
 export default function AdoptPage() {
   const router = useRouter();
-  const { addLobster } = useStore();
+  const { token } = useAuthStore();
+  const { initialize } = useStore();
   const [name, setName] = useState('');
-  const [role, setRole] = useState('General Assistant');
   const [isHatching, setIsHatching] = useState(false);
   const [hatchProgress, setHatchProgress] = useState(0);
+  const [error, setError] = useState('');
 
-  const roles = [
-    'General Assistant',
-    'Research Assistant',
-    'Writing Assistant',
-    'Data Analyst',
-    'Coding Expert',
-    'Creative Consultant'
-  ];
+  const handleAdopt = async () => {
+    const trimmedName = name.trim();
+    if (!trimmedName || isHatching) return;
 
-  const handleAdopt = () => {
-    if (!name.trim()) return;
-    
+    if (!token) {
+      setError('请先登录，再领取官方龙虾。');
+      return;
+    }
+
     setIsHatching(true);
-    
-    let progress = 0;
-    const interval = setInterval(() => {
-      progress += 5;
-      setHatchProgress(progress);
-      
-      if (progress >= 100) {
-        clearInterval(interval);
-        
-        const newLobster: Lobster = {
-          id: `lobster-${Date.now()}`,
-          name: name.trim(),
-          role: role,
-          status: 'idle',
-          createdAt: new Date().toISOString(),
-          conversations: [{
-            id: `conv-${Date.now()}`,
-            role: 'lobster',
-            content: `Hello! I am ${name.trim()}, a happy lobster. Nice to meet you! How can I help you?`,
-            timestamp: new Date().toISOString()
-          }]
-        };
-        
-        addLobster(newLobster);
-        
-        setTimeout(() => {
-          router.push('/my-den');
-        }, 500);
-      }
-    }, 100);
+    setHatchProgress(15);
+    setError('');
+
+    let progressTimer: number | undefined;
+    try {
+      progressTimer = window.setInterval(() => {
+        setHatchProgress((current) => Math.min(current + 8, 88));
+      }, 120);
+
+      const agent = await adoptOfficialLobster(trimmedName);
+      window.clearInterval(progressTimer);
+      setHatchProgress(100);
+      await initialize();
+
+      window.setTimeout(() => {
+        router.push(`/agent/${agent.id}`);
+      }, 350);
+    } catch (adoptError) {
+      if (progressTimer) window.clearInterval(progressTimer);
+      setError(adoptError instanceof Error ? adoptError.message : '领取官方龙虾失败。');
+      setIsHatching(false);
+      setHatchProgress(0);
+    }
   };
 
   return (
-    <div className="max-w-2xl mx-auto">
+    <div className="mx-auto max-w-2xl">
       <BackButton href="/" />
-      
+
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
-        className="bg-pixel-white border-4 border-pixel-black p-6 mt-6"
+        className="mt-6 border-4 border-pixel-black bg-pixel-white p-6"
         style={{ boxShadow: '8px 8px 0px 0px #101010' }}
       >
-        <h1 className="font-pixel text-3xl text-pixel-black text-center mb-6">
-          Quick Adopt Lobster
+        <h1 className="mb-2 text-center font-pixel text-3xl text-pixel-black">
+          领取官方龙虾
         </h1>
+        <p className="mb-6 text-center font-pixel text-sm text-pixel-black/60">
+          给它起一个名字，系统会基于当前官方龙虾模板创建真实后端 Agent。
+        </p>
 
-        {/* Egg Animation */}
-        <div className="flex justify-center mb-8">
+        <div className="mb-8 flex justify-center">
           <motion.div
-            animate={isHatching ? {
-              scale: [1, 1.1, 1],
-              rotate: [0, -5, 5, 0]
-            } : {}}
-            transition={{ duration: 0.5, repeat: isHatching ? Infinity : 0 }}
+            animate={
+              isHatching
+                ? {
+                    scale: [1, 1.06, 1],
+                    rotate: [0, -4, 4, 0],
+                  }
+                : {}
+            }
+            transition={{ duration: 0.55, repeat: isHatching ? Infinity : 0 }}
             className="relative"
           >
-            {/* Egg */}
-            <div className={`
-              w-32 h-40
-              ${isHatching ? 'bg-pixel-yellow' : 'bg-pixel-white'}
-              border-4 border-pixel-black
-              rounded-t-full
-              relative
-            `}>
-              {/* Spots */}
-              <div className="absolute top-8 left-6 w-4 h-4 bg-pixel-yellow rounded-full" />
-              <div className="absolute top-16 right-8 w-3 h-3 bg-pixel-yellow rounded-full" />
-              <div className="absolute bottom-12 left-10 w-5 h-5 bg-pixel-yellow rounded-full" />
-              
-              {isHatching && (
-                <motion.div
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: [0, 1, 0] }}
-                  transition={{ duration: 0.3, repeat: Infinity }}
-                  className="absolute inset-0 flex items-center justify-center"
-                >
-                  <span className="text-4xl">*</span>
-                </motion.div>
-              )}
+            <div className="flex h-36 w-36 items-center justify-center border-4 border-pixel-black bg-pixel-yellow">
+              <img
+                src="/lobsters/lobster-merchant.png"
+                alt="官方龙虾"
+                className="h-28 w-28 object-contain"
+                style={{ imageRendering: 'pixelated' }}
+              />
             </div>
 
-            {/* Progress Bar */}
             {isHatching && (
               <div className="mt-4">
-                <div className="w-32 h-4 bg-pixel-black border-2 border-pixel-white">
+                <div className="h-4 w-36 border-2 border-pixel-white bg-pixel-black">
                   <motion.div
                     className="h-full bg-pixel-green"
-                    initial={{ width: 0 }}
                     animate={{ width: `${hatchProgress}%` }}
-                    transition={{ duration: 0.1 }}
+                    transition={{ duration: 0.12 }}
                   />
                 </div>
-                <p className="font-pixel text-center text-sm text-pixel-black mt-1">
-                  Hatching... {hatchProgress}%
+                <p className="mt-1 text-center font-pixel text-sm text-pixel-black">
+                  创建中... {hatchProgress}%
                 </p>
               </div>
             )}
           </motion.div>
         </div>
 
-        {/* Form */}
-        {!isHatching && (
-          <div className="space-y-4">
-            <div>
-              <label className="font-pixel text-pixel-black block mb-2">
-                Lobster Name
-              </label>
-              <PixelInput
-                value={name}
-                onChange={setName}
-                placeholder="Give your lobster a name..."
-                className="w-full"
-              />
-            </div>
-
-            <div>
-              <label className="font-pixel text-pixel-black block mb-2">
-                Select Role
-              </label>
-              <div className="grid grid-cols-3 gap-2">
-                {roles.map((r) => (
-                  <motion.button
-                    key={r}
-                    whileHover={{ scale: 1.05 }}
-                    whileTap={{ scale: 0.95 }}
-                    onClick={() => setRole(r)}
-                    className={`
-                      px-3 py-2
-                      font-pixel text-sm
-                      border-4 border-pixel-black
-                      transition-colors
-                      ${role === r 
-                        ? 'bg-pixel-blue text-pixel-white' 
-                        : 'bg-pixel-white text-pixel-black hover:bg-pixel-gray'}
-                    `}
-                  >
-                    {r}
-                  </motion.button>
-                ))}
-              </div>
-            </div>
-
-            <div className="pt-4">
-              <PixelButton
-                onClick={handleAdopt}
-                disabled={!name.trim()}
-                variant="primary"
-                size="lg"
-                className="w-full"
-              >
-                Start Hatching!
-              </PixelButton>
-            </div>
+        {error && (
+          <div className="mb-4 border-4 border-pixel-red bg-pixel-red/10 p-3">
+            <p className="font-pixel text-sm text-pixel-red">{error}</p>
           </div>
         )}
+
+        <div className="space-y-4">
+          <div>
+            <label className="mb-2 block font-pixel text-pixel-black">
+              Agent 名字
+            </label>
+            <PixelInput
+              value={name}
+              onChange={setName}
+              placeholder="给官方龙虾起个名字..."
+              className="w-full"
+              disabled={isHatching}
+            />
+          </div>
+
+          <PixelButton
+            onClick={handleAdopt}
+            disabled={!name.trim() || isHatching}
+            variant="primary"
+            size="lg"
+            className="w-full"
+          >
+            {isHatching ? '正在创建真实 Agent...' : '领取官方龙虾'}
+          </PixelButton>
+        </div>
       </motion.div>
     </div>
   );

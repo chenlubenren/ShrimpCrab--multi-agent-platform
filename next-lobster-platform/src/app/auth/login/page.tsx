@@ -28,10 +28,8 @@ export default function LoginPage() {
   const { token, user, setAuth, isLoading, setLoading, error, setError, clearError } = useAuthStore();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
-    setMounted(true);
     if (token && user) {
       router.push('/');
     }
@@ -55,8 +53,6 @@ export default function LoginPage() {
       setError(err instanceof Error ? err.message : '登录失败，请检查邮箱和密码');
     }
   }
-
-  if (!mounted) return null;
 
   return (
     <div className="relative min-h-[60vh] flex items-center justify-center overflow-hidden py-8">
@@ -177,6 +173,7 @@ export default function LoginPage() {
                 value={email}
                 onChange={setEmail}
                 placeholder="your@email.com"
+                type="email"
               />
             </div>
 
@@ -186,6 +183,7 @@ export default function LoginPage() {
                 value={password}
                 onChange={setPassword}
                 placeholder="********"
+                type="password"
               />
             </div>
 

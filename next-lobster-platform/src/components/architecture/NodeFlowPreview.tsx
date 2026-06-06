@@ -16,9 +16,33 @@ import {
 } from '@xyflow/react';
 import { motion, AnimatePresence } from 'framer-motion';
 import '@xyflow/react/dist/style.css';
-import { Architecture, ArchitectureAgent, Lobster } from '@/types';
+import {
+  Architecture,
+  ArchitectureAgent,
+  Lobster,
+  WorkflowExecution,
+  WorkflowNodeRunState,
+} from '@/types';
 import { useStore } from '@/store/useStore';
 import { LobsterSprite } from '@/components/lobster/LobsterSprite';
+
+type PreviewNodeData = Record<string, unknown> & {
+  label?: string;
+  role?: string;
+  isManager?: boolean;
+  agentId?: string;
+  description?: string;
+  workflowStatus?: WorkflowNodeRunState['status'];
+  workflowTask?: string;
+  workflowAgentName?: string;
+  workflowKind?: string;
+  workflowRunCount?: number;
+};
+
+type PreviewEdgeData = Record<string, unknown> & {
+  sourceHandle?: string;
+  active?: boolean;
+};
 
 /** 画布上展示的成员名：技术名 research-bot-manager 显示为「项目经理」 */
 function displayAgentLabel(label: string | undefined, isManager?: boolean): string {
@@ -28,22 +52,73 @@ function displayAgentLabel(label: string | undefined, isManager?: boolean): stri
   return raw || '未命名成员';
 }
 
+function workflowStatusLabel(status: WorkflowNodeRunState['status']): string {
+  const labels: Record<WorkflowNodeRunState['status'], string> = {
+    pending: '等待',
+    ready: '就绪',
+    running: '工作中',
+    succeeded: '完成',
+    failed: '失败',
+    skipped: '跳过',
+  };
+  return labels[status];
+}
+
+function workflowStatusClass(status: WorkflowNodeRunState['status']): string {
+  if (status === 'running') return 'bg-pixel-blue text-pixel-white';
+  if (status === 'ready') return 'bg-pixel-yellow text-pixel-black';
+  if (status === 'succeeded') return 'bg-pixel-green text-pixel-white';
+  if (status === 'failed') return 'bg-pixel-red text-pixel-white';
+  if (status === 'skipped') return 'bg-pixel-gray text-pixel-white';
+  return 'bg-pixel-white text-pixel-black';
+}
+
+function workflowFrameClass(status?: WorkflowNodeRunState['status'], selected?: boolean): string {
+  if (selected) return 'ring-4 ring-pixel-yellow';
+  if (status === 'running') return 'ring-4 ring-pixel-blue';
+  if (status === 'ready') return 'ring-4 ring-pixel-yellow';
+  if (status === 'failed') return 'ring-4 ring-pixel-red';
+  if (status === 'succeeded') return 'ring-4 ring-pixel-green';
+  return '';
+}
+
+function shortPreviewText(value: string | undefined, maxLength = 56): string {
+  const normalized = (value ?? '').replace(/\s+/g, ' ').trim();
+  return normalized.length > maxLength ? `${normalized.slice(0, maxLength)}...` : normalized;
+}
+
 // ─── Preview Node Components (simplified, with handles for visibility) ──────────────
 function PreviewAgentNode({
   data,
   selected,
 }: {
-  data: { label?: string; role?: string; isManager?: boolean; agentId?: string };
+  data: PreviewNodeData;
   selected?: boolean;
 }) {
-  const title = displayAgentLabel(data.label, data.isManager);
+  const status = data.workflowStatus;
+  const isRunning = status === 'running';
+  const title = displayAgentLabel(data.workflowAgentName || data.label, data.isManager);
+  const kind = typeof data.workflowKind === 'string'
+    ? data.workflowKind
+    : typeof data.kind === 'string'
+      ? data.kind
+      : undefined;
   return (
-    <div
-      className={`px-4 py-3 min-w-[160px] border-4 border-pixel-black ${
+    <motion.div
+      animate={isRunning ? { y: [0, -3, 0] } : { y: 0 }}
+      transition={isRunning ? { duration: 1, repeat: Infinity, ease: 'easeInOut' } : { duration: 0.15 }}
+      className={`relative px-4 py-3 min-w-[170px] border-4 border-pixel-black ${
         data.isManager ? 'bg-pixel-blue' : 'bg-pixel-green'
-      } ${selected ? 'ring-4 ring-pixel-yellow' : ''}`}
-      style={{ boxShadow: selected ? '6px 6px 0px 0px #f59e0b' : '4px 4px 0px 0px #101010' }}
+      } ${workflowFrameClass(status, selected)}`}
+      style={{ boxShadow: selected || status ? '6px 6px 0px 0px #101010' : '4px 4px 0px 0px #101010' }}
     >
+      {isRunning && (
+        <motion.div
+          className="absolute -inset-2 border-4 border-pixel-blue pointer-events-none"
+          animate={{ opacity: [0.15, 0.85, 0.15] }}
+          transition={{ duration: 0.9, repeat: Infinity, ease: 'easeInOut' }}
+        />
+      )}
       {/* Left handle (input) */}
       <Handle
         type="target"
@@ -66,17 +141,41 @@ function PreviewAgentNode({
         <span className="font-pixel text-xs text-pixel-white/70 text-center">
           {data.role || '未设置角色'}
         </span>
+        {kind && (
+          <span className="px-2 py-0.5 border-2 border-pixel-black bg-pixel-white text-pixel-black font-pixel text-[10px]">
+            {kind}
+          </span>
+        )}
+        {status && (
+          <span className={`mt-1 px-2 py-0.5 border-2 border-pixel-black font-pixel text-[10px] ${workflowStatusClass(status)}`}>
+            {workflowStatusLabel(status)}
+          </span>
+        )}
+        {isRunning && data.workflowTask && (
+          <span className="max-w-[150px] truncate font-pixel text-[10px] text-pixel-white/90 text-center">
+            {shortPreviewText(data.workflowTask)}
+          </span>
+        )}
       </div>
-    </div>
+    </motion.div>
   );
 }
 
-function PreviewConditionNode({ data }: { data: { label?: string; description?: string } }) {
+function PreviewConditionNode({ data }: { data: PreviewNodeData }) {
+  const status = data.workflowStatus;
+  const isRunning = status === 'running';
   return (
-    <div
-      className="relative bg-pixel-purple border-4 border-pixel-black"
-      style={{ width: 180, height: 80 }}
+    <motion.div
+      animate={isRunning ? { scale: [1, 1.04, 1] } : { scale: 1 }}
+      transition={isRunning ? { duration: 1, repeat: Infinity, ease: 'easeInOut' } : { duration: 0.15 }}
+      className={`relative bg-pixel-purple border-4 border-pixel-black ${workflowFrameClass(status)}`}
+      style={{ width: 180, height: 80, boxShadow: status ? '6px 6px 0px 0px #101010' : undefined }}
     >
+      {status && (
+        <span className={`absolute -top-8 left-1/2 -translate-x-1/2 px-2 py-0.5 border-2 border-pixel-black font-pixel text-[10px] z-10 ${workflowStatusClass(status)}`}>
+          {workflowStatusLabel(status)}
+        </span>
+      )}
       {/* Left handle (input) */}
       <Handle
         type="target"
@@ -124,16 +223,22 @@ function PreviewConditionNode({ data }: { data: { label?: string; description?: 
       >
         <span className="bg-pixel-red border-2 border-pixel-black px-1">否 ✗</span>
       </div>
-    </div>
+    </motion.div>
   );
 }
 
-function PreviewStartNode({ data }: { data: { label?: string } }) {
+function PreviewStartNode({ data }: { data: PreviewNodeData }) {
+  const status = data.workflowStatus;
   return (
     <div
-      className="px-4 py-3 min-w-[120px] border-4 border-pixel-black bg-pixel-black"
-      style={{ boxShadow: '4px 4px 0px 0px #101010', borderRadius: '999px' }}
+      className={`relative px-4 py-3 min-w-[120px] border-4 border-pixel-black bg-pixel-black ${workflowFrameClass(status)}`}
+      style={{ boxShadow: status ? '6px 6px 0px 0px #101010' : '4px 4px 0px 0px #101010', borderRadius: '999px' }}
     >
+      {status && (
+        <span className={`absolute -top-8 left-1/2 -translate-x-1/2 px-2 py-0.5 border-2 border-pixel-black font-pixel text-[10px] ${workflowStatusClass(status)}`}>
+          {workflowStatusLabel(status)}
+        </span>
+      )}
       {/* Right handle (output) */}
       <Handle
         type="source"
@@ -169,8 +274,35 @@ function DataFlowEdgePreview({
   data,
   sourceHandleId,
 }: EdgeProps) {
+  const edgeData = (data ?? {}) as PreviewEdgeData;
+  const isActive = edgeData.active === true;
   const isNoPort =
-    sourceHandleId === 'no' || (data as { sourceHandle?: string } | undefined)?.sourceHandle === 'no';
+    sourceHandleId === 'no' || edgeData.sourceHandle === 'no';
+
+  const renderEdge = (path: string) => (
+    <g>
+      <path
+        d={path}
+        fill="none"
+        stroke={selected ? '#f59e0b' : '#101010'}
+        strokeWidth={selected ? 4 : 3}
+        markerEnd={`url(#arrow-${selected ? 'selected' : 'default'})`}
+      />
+      {isActive && (
+        <motion.path
+          d={path}
+          fill="none"
+          stroke="#06b6d4"
+          strokeWidth={selected ? 5 : 4}
+          strokeLinecap="square"
+          strokeDasharray="8 10"
+          initial={{ strokeDashoffset: 0 }}
+          animate={{ strokeDashoffset: -36 }}
+          transition={{ duration: 0.85, repeat: Infinity, ease: 'linear' }}
+        />
+      )}
+    </g>
+  );
 
   if (isNoPort) {
     const [stepPath] = getSmoothStepPath({
@@ -183,27 +315,11 @@ function DataFlowEdgePreview({
       borderRadius: 0,
       offset: 28,
     });
-    return (
-      <path
-        d={stepPath}
-        fill="none"
-        stroke={selected ? '#f59e0b' : '#101010'}
-        strokeWidth={selected ? 4 : 3}
-        markerEnd={`url(#arrow-${selected ? 'selected' : 'default'})`}
-      />
-    );
+    return renderEdge(stepPath);
   }
 
   const [edgePath] = getBezierPath({ sourceX, sourceY, targetX, targetY });
-  return (
-    <path
-      d={edgePath}
-      fill="none"
-      stroke={selected ? '#f59e0b' : '#101010'}
-      strokeWidth={selected ? 4 : 3}
-      markerEnd={`url(#arrow-${selected ? 'selected' : 'default'})`}
-    />
-  );
+  return renderEdge(edgePath);
 }
 
 const edgeTypes = {
@@ -328,12 +444,50 @@ function enforceMinimumHorizontalGap(nodes: Node[]): Node[] {
   }));
 }
 
+function buildActiveExecutionEdgeIds(execution?: WorkflowExecution | null): Set<string> {
+  const active = new Set<string>();
+  if (!execution || execution.status !== 'running') return active;
+
+  for (const edge of execution.workflowDsl.edges) {
+    const source = execution.nodeStates[edge.from];
+    const target = execution.nodeStates[edge.to];
+    if (!source || !target) continue;
+
+    const targetIsCurrent = execution.currentNodeIds.includes(target.nodeId) && target.status === 'running';
+    const sourceIsWorking = source.status === 'running' && !['failed', 'skipped'].includes(target.status);
+    const transferIntoTarget =
+      (source.status === 'succeeded' || source.status === 'skipped' || source.status === 'running') &&
+      (target.status === 'ready' || target.status === 'running');
+
+    if (targetIsCurrent || sourceIsWorking || transferIntoTarget) {
+      active.add(edge.id);
+    }
+  }
+
+  return active;
+}
+
+function isPreviewEdgeActive(
+  edge: Edge,
+  execution: WorkflowExecution | null | undefined,
+  activeEdgeIds: Set<string>
+): boolean {
+  if (!execution) return false;
+  if (activeEdgeIds.has(edge.id)) return true;
+  return execution.workflowDsl.edges.some((dslEdge) =>
+    dslEdge.from === edge.source &&
+    dslEdge.to === edge.target &&
+    activeEdgeIds.has(dslEdge.id)
+  );
+}
+
 // ─── Main Component ───────────────────────────────────────────────────────────
 interface NodeFlowPreviewProps {
   architecture: Architecture;
+  execution?: WorkflowExecution | null;
 }
 
-export function NodeFlowPreview({ architecture }: NodeFlowPreviewProps) {
+export function NodeFlowPreview({ architecture, execution }: NodeFlowPreviewProps) {
   const { lobsters } = useStore();
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
@@ -365,6 +519,44 @@ export function NodeFlowPreview({ architecture }: NodeFlowPreviewProps) {
     };
   }, [architecture]);
 
+  const activeEdgeIds = useMemo(() => buildActiveExecutionEdgeIds(execution), [execution]);
+
+  const nodesWithExecution = useMemo(() => {
+    return previewNodes.map((node) => {
+      const state = execution?.nodeStates[node.id];
+      return {
+        ...node,
+        data: {
+          ...(node.data as Record<string, unknown>),
+          workflowStatus: state?.status,
+          workflowTask: state?.task,
+          workflowAgentName: state?.agentName,
+          workflowKind: state?.kind,
+          workflowRunCount: state?.runCount,
+        } as PreviewNodeData,
+      };
+    });
+  }, [execution, previewNodes]);
+
+  const edgesWithExecution = useMemo(() => {
+    return previewEdges.map((edge) => {
+      const active = isPreviewEdgeActive(edge, execution, activeEdgeIds);
+      return {
+        ...edge,
+        markerEnd: { type: MarkerType.ArrowClosed, color: active ? '#06b6d4' : '#101010' },
+        style: {
+          ...(edge.style ?? {}),
+          stroke: active ? '#06b6d4' : '#101010',
+          strokeWidth: active ? 4 : 3,
+        },
+        data: {
+          ...((edge.data ?? {}) as Record<string, unknown>),
+          active,
+        } as PreviewEdgeData,
+      };
+    });
+  }, [activeEdgeIds, execution, previewEdges]);
+
   // Build a map from pipeline id → agent for rich detail lookups
   const agentMap = useMemo(() => {
     const m = new Map<string, ArchitectureAgent>();
@@ -374,7 +566,8 @@ export function NodeFlowPreview({ architecture }: NodeFlowPreviewProps) {
 
   const showTooltip = selectedNodeId || hoveredNodeId;
   const activeNodeId = selectedNodeId ?? hoveredNodeId;
-  const activeNode = previewNodes.find((n) => n.id === activeNodeId);
+  const activeNode = nodesWithExecution.find((n) => n.id === activeNodeId);
+  const activeRuntimeState = activeNodeId ? execution?.nodeStates[activeNodeId] : undefined;
 
   // Resolve the real agent — check data.agentId first (nodes branch), fall back to node.id (agents-only branch)
   const activeAgent = useMemo(() => {
@@ -415,11 +608,11 @@ export function NodeFlowPreview({ architecture }: NodeFlowPreviewProps) {
         style={{ boxShadow: '6px 6px 0px 0px #101010', height: '400px' }}
       >
         <ReactFlow
-          nodes={previewNodes.map((n) => ({
+          nodes={nodesWithExecution.map((n) => ({
             ...n,
             selected: n.id === selectedNodeId,
           }))}
-          edges={previewEdges}
+          edges={edgesWithExecution}
           nodeTypes={nodeTypes}
           edgeTypes={edgeTypes}
           fitView
@@ -530,6 +723,24 @@ export function NodeFlowPreview({ architecture }: NodeFlowPreviewProps) {
                 )}
               </div>
 
+              {activeRuntimeState && (
+                <div className="pt-1 border-t-2 border-pixel-black/20">
+                  <div className="flex items-center justify-between gap-2 mb-2">
+                    <span className="bg-pixel-blue text-pixel-white px-1.5 py-0.5 border-2 border-pixel-black text-xs">
+                      执行进展
+                    </span>
+                    <span className={`px-2 py-0.5 border-2 border-pixel-black font-pixel text-[10px] ${workflowStatusClass(activeRuntimeState.status)}`}>
+                      {workflowStatusLabel(activeRuntimeState.status)}
+                    </span>
+                  </div>
+                  {activeRuntimeState.task && (
+                    <div className="font-pixel text-xs text-pixel-black/70 leading-tight">
+                      {shortPreviewText(activeRuntimeState.task, 96)}
+                    </div>
+                  )}
+                </div>
+              )}
+
               {/* Linked Lobster */}
               <div className="pt-1 border-t-2 border-pixel-black/20">
                 <div className="flex items-center gap-1 mb-2">
@@ -566,19 +777,23 @@ export function NodeFlowPreview({ architecture }: NodeFlowPreviewProps) {
               <div className="flex items-center gap-2 pt-1 border-t-2 border-pixel-black/20">
                 <span className="font-pixel text-xs text-pixel-black/60">状态:</span>
                 <span
-                  className={`px-2 py-0.5 border-2 border-pixel-black font-pixel text-xs text-pixel-white ${
-                    activeAgent?.status === 'executing'
-                      ? 'bg-pixel-yellow'
-                      : activeAgent?.status === 'active'
-                      ? 'bg-pixel-green'
-                      : 'bg-pixel-gray'
+                  className={`px-2 py-0.5 border-2 border-pixel-black font-pixel text-xs ${
+                    activeRuntimeState
+                      ? workflowStatusClass(activeRuntimeState.status)
+                      : activeAgent?.status === 'executing'
+                        ? 'bg-pixel-yellow text-pixel-black'
+                        : activeAgent?.status === 'active'
+                          ? 'bg-pixel-green text-pixel-white'
+                          : 'bg-pixel-gray text-pixel-white'
                   }`}
                 >
-                  {activeAgent?.status === 'executing'
-                    ? '执行中'
-                    : activeAgent?.status === 'active'
-                    ? '激活'
-                    : '待命'}
+                  {activeRuntimeState
+                    ? workflowStatusLabel(activeRuntimeState.status)
+                    : activeAgent?.status === 'executing'
+                      ? '执行中'
+                      : activeAgent?.status === 'active'
+                        ? '激活'
+                        : '待命'}
                 </span>
               </div>
             </div>

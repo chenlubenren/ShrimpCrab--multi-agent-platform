@@ -1,5 +1,4 @@
-import { Lobster, Architecture, Message, Conversation } from '@/types';
-import { mockArchitectures, mockMessages } from './mockData';
+import { Lobster, Architecture, Message, Conversation, WorkflowDsl, WorkflowExecution, SessionMessage, WhiteboardNote, Project, ProjectInput, RuntimeHealth } from '@/types';
 
 const API_BASE = 'http://localhost:3002';
 
@@ -46,10 +45,11 @@ export async function register(email: string, username: string, password: string
 }
 
 // ==================== Agents API ====================
-export async function fetchAgents(): Promise<any[]> {
+export async function fetchAgents(caveId?: string): Promise<any[]> {
   try {
     const headers = getAuthHeaders();
-    const res = await fetch(`${API_BASE}/api/agents`, { headers });
+    const query = caveId ? `?caveId=${encodeURIComponent(caveId)}` : '';
+    const res = await fetch(`${API_BASE}/api/agents${query}`, { headers });
     if (!res.ok) throw new Error('Failed to fetch');
     const data = await res.json();
     return data.agents || [];
@@ -70,6 +70,145 @@ export async function fetchAgentById(id: string): Promise<any | null> {
   }
 }
 
+export interface TeaPartyTurnRequest {
+  agentId: string;
+  prompt: string;
+  sessionName?: string;
+  topic?: string;
+  members?: Array<{
+    id: string;
+    name: string;
+    role?: string;
+    description?: string;
+  }>;
+  messages?: Array<{
+    senderName: string;
+    content: string;
+  }>;
+  whiteboardNotes?: Array<{
+    column: string;
+    text: string;
+    authorName: string;
+  }>;
+}
+
+export interface TeaPartyTurnResponse {
+  agent: {
+    id: string;
+    name: string;
+    platform: string;
+  };
+  content: string;
+}
+
+export async function executeTeaPartyTurn(data: TeaPartyTurnRequest): Promise<TeaPartyTurnResponse> {
+  const headers = {
+    ...getAuthHeaders(),
+    'Content-Type': 'application/json',
+  };
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}/api/agents/tea-party/turn`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(data),
+    });
+  } catch {
+    throw new Error('后端连接失败或调用超时，请确认后端服务和 Agent CLI 正常运行');
+  }
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(payload.message || '真实 Agent 调用失败');
+  }
+  return payload;
+}
+
+export interface TeaPartySessionMember {
+  id: string;
+  name: string;
+  role?: string;
+  description?: string;
+}
+
+export interface TeaPartyRunLog {
+  id: string;
+  sessionId: string;
+  agentName: string;
+  status: 'running' | 'success' | 'error';
+  message: string;
+  timestamp: string;
+}
+
+export interface TeaPartySessionState {
+  sessionId: string;
+  sessionName: string;
+  active: boolean;
+  stopRequested: boolean;
+  round: number;
+  members: TeaPartySessionMember[];
+  messages: SessionMessage[];
+  whiteboardNotes: WhiteboardNote[];
+  runLogs: TeaPartyRunLog[];
+  runningAgents: string[];
+  updatedAt: string;
+}
+
+export interface SendTeaPartySessionMessageRequest {
+  sessionName: string;
+  userMessage: SessionMessage;
+  members: TeaPartySessionMember[];
+  messages: SessionMessage[];
+  whiteboardNotes: WhiteboardNote[];
+}
+
+export async function sendTeaPartySessionMessage(
+  sessionId: string,
+  data: SendTeaPartySessionMessageRequest
+): Promise<TeaPartySessionState> {
+  const headers = {
+    ...getAuthHeaders(),
+    'Content-Type': 'application/json',
+  };
+  const res = await fetch(`${API_BASE}/api/agents/tea-party/sessions/${encodeURIComponent(sessionId)}/messages`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(data),
+  });
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(payload.message || '茶话会后台任务启动失败');
+  }
+  return payload;
+}
+
+export async function fetchTeaPartySession(sessionId: string): Promise<TeaPartySessionState> {
+  const headers = getAuthHeaders();
+  const res = await fetch(`${API_BASE}/api/agents/tea-party/sessions/${encodeURIComponent(sessionId)}`, {
+    headers,
+  });
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(payload.message || '获取茶话会后台状态失败');
+  }
+  return payload;
+}
+
+export async function stopTeaPartySession(sessionId: string): Promise<TeaPartySessionState> {
+  const headers = {
+    ...getAuthHeaders(),
+    'Content-Type': 'application/json',
+  };
+  const res = await fetch(`${API_BASE}/api/agents/tea-party/sessions/${encodeURIComponent(sessionId)}/stop`, {
+    method: 'POST',
+    headers,
+  });
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(payload.message || '停止茶话会后台任务失败');
+  }
+  return payload;
+}
+
 export async function createAgent(data: Partial<Lobster>): Promise<Lobster> {
   const headers = {
     ...getAuthHeaders(),
@@ -82,6 +221,23 @@ export async function createAgent(data: Partial<Lobster>): Promise<Lobster> {
   });
   if (!res.ok) throw new Error('Failed to create');
   return res.json();
+}
+
+export async function adoptOfficialLobster(name: string): Promise<Lobster> {
+  const headers = {
+    ...getAuthHeaders(),
+    'Content-Type': 'application/json',
+  };
+  const res = await fetch(`${API_BASE}/api/agents/official-lobster/adopt`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ name }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.message || '领取官方龙虾失败');
+  }
+  return data.agent;
 }
 
 export async function updateAgent(agentId: string, updates: Partial<Lobster>): Promise<Lobster> {
@@ -99,13 +255,42 @@ export async function updateAgent(agentId: string, updates: Partial<Lobster>): P
   return data.agent;
 }
 
+export async function publishAgentToMarket(agentId: string): Promise<{ success: boolean; marketAgentId?: string }> {
+  const headers = {
+    ...getAuthHeaders(),
+    'Content-Type': 'application/json',
+  };
+  const res = await fetch(`${API_BASE}/api/agents/${agentId}/market`, {
+    method: 'POST',
+    headers,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.message || '发布到 agent 市场失败');
+  }
+  return data;
+}
+
+export async function unpublishAgentFromMarket(agentId: string): Promise<{ success: boolean }> {
+  const res = await fetch(`${API_BASE}/api/agents/${agentId}/market`, {
+    method: 'DELETE',
+    headers: getAuthHeaders(),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.message || '下架到 agent 市场失败');
+  }
+  return data;
+}
+
 // ==================== Caves API ====================
 export async function fetchCaves(): Promise<any[]> {
   try {
     const headers = getAuthHeaders();
     const res = await fetch(`${API_BASE}/api/agents/caves`, { headers });
     if (!res.ok) throw new Error('Failed to fetch');
-    return await res.json();
+    const data = await res.json();
+    return Array.isArray(data) ? data : data.caves || [];
   } catch {
     return [];
   }
@@ -122,7 +307,20 @@ export async function createCave(name: string, color: string): Promise<any> {
     body: JSON.stringify({ name, color }),
   });
   if (!res.ok) throw new Error('Failed to create');
-  return res.json();
+  const data = await res.json();
+  return data.cave || data;
+}
+
+export async function deleteCave(id: string): Promise<{ success: boolean }> {
+  const res = await fetch(`${API_BASE}/api/agents/caves/${id}`, {
+    method: 'DELETE',
+    headers: getAuthHeaders(),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.message || 'Failed to delete cave');
+  }
+  return data;
 }
 
 // ==================== Conversations API ====================
@@ -221,7 +419,7 @@ export async function fetchArchitectures(): Promise<Architecture[]> {
     if (!res.ok) throw new Error('Failed to fetch');
     return await res.json();
   } catch {
-    return mockArchitectures;
+    return [];
   }
 }
 
@@ -231,7 +429,7 @@ export async function fetchArchitectureById(id: string): Promise<Architecture | 
     if (!res.ok) throw new Error('Failed to fetch');
     return await res.json();
   } catch {
-    return mockArchitectures.find((a) => a.id === id) || null;
+    return null;
   }
 }
 
@@ -253,6 +451,189 @@ export async function updateArchitectureStatus(
   console.log(`Updating ${agentId} in ${archId} to ${status}`);
 }
 
+// ==================== Project API ====================
+export async function fetchProjects(): Promise<Project[]> {
+  const headers = getAuthHeaders();
+  const res = await fetch(`${API_BASE}/api/projects`, { headers });
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(payload.message || '获取项目列表失败');
+  }
+  return Array.isArray(payload.projects) ? payload.projects : [];
+}
+
+export async function fetchProjectById(projectId: string): Promise<Project | null> {
+  const headers = getAuthHeaders();
+  const res = await fetch(`${API_BASE}/api/projects/${encodeURIComponent(projectId)}`, { headers });
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    if (res.status === 404) return null;
+    throw new Error(payload.message || '获取项目失败');
+  }
+  return payload.project || null;
+}
+
+export async function createProject(data: ProjectInput): Promise<Project> {
+  const headers = {
+    ...getAuthHeaders(),
+    'Content-Type': 'application/json',
+  };
+  const res = await fetch(`${API_BASE}/api/projects`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(data),
+  });
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(payload.message || '创建项目失败');
+  }
+  return payload.project;
+}
+
+export async function updateProject(projectId: string, data: Partial<ProjectInput>): Promise<Project> {
+  const headers = {
+    ...getAuthHeaders(),
+    'Content-Type': 'application/json',
+  };
+  const res = await fetch(`${API_BASE}/api/projects/${encodeURIComponent(projectId)}`, {
+    method: 'PATCH',
+    headers,
+    body: JSON.stringify(data),
+  });
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(payload.message || '更新项目失败');
+  }
+  return payload.project;
+}
+
+export async function openProject(projectId: string): Promise<Project> {
+  const headers = {
+    ...getAuthHeaders(),
+    'Content-Type': 'application/json',
+  };
+  const res = await fetch(`${API_BASE}/api/projects/${encodeURIComponent(projectId)}/open`, {
+    method: 'POST',
+    headers,
+  });
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(payload.message || '打开项目失败');
+  }
+  return payload.project;
+}
+
+export async function deleteProject(projectId: string): Promise<{ success: boolean }> {
+  const res = await fetch(`${API_BASE}/api/projects/${encodeURIComponent(projectId)}`, {
+    method: 'DELETE',
+    headers: getAuthHeaders(),
+  });
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(payload.message || '删除项目失败');
+  }
+  return payload;
+}
+
+// ==================== Runtime Health API ====================
+export async function fetchRuntimeHealth(): Promise<RuntimeHealth> {
+  const res = await fetch(`${API_BASE}/api/providers/runtime-health`, {
+    headers: getAuthHeaders(),
+  });
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(payload.message || '运行时预检失败');
+  }
+  return payload.health;
+}
+
+// ==================== Workflow API ====================
+export interface GenerateWorkflowDslRequest {
+  prompt: string;
+  availableAgents?: Array<{
+    id: string;
+    name: string;
+    role?: string;
+    description?: string;
+    tags?: string[];
+  }>;
+}
+
+export interface GenerateWorkflowDslResponse {
+  workflowDsl: WorkflowDsl;
+  generator: 'deepseek' | 'pi' | 'fallback';
+  warnings: string[];
+}
+
+export async function generateWorkflowDslFromPrompt(
+  data: GenerateWorkflowDslRequest
+): Promise<GenerateWorkflowDslResponse> {
+  const headers = {
+    ...getAuthHeaders(),
+    'Content-Type': 'application/json',
+  };
+  const res = await fetch(`${API_BASE}/api/workflows/generate-dsl`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(data),
+  });
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(payload.message || '生成 Workflow DSL 失败');
+  }
+  return payload;
+}
+
+export interface StartWorkflowExecutionRequest {
+  workflowDsl: WorkflowDsl;
+  task: string;
+  architectureId?: string;
+  projectId?: string;
+  dryRun?: boolean;
+}
+
+export async function startWorkflowExecution(
+  data: StartWorkflowExecutionRequest
+): Promise<WorkflowExecution> {
+  const headers = {
+    ...getAuthHeaders(),
+    'Content-Type': 'application/json',
+  };
+  const res = await fetch(`${API_BASE}/api/workflows/execute`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(data),
+  });
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(payload.message || '启动 Workflow 执行失败');
+  }
+  return payload.execution;
+}
+
+export async function fetchWorkflowExecution(executionId: string): Promise<WorkflowExecution> {
+  const res = await fetch(`${API_BASE}/api/workflows/executions/${executionId}`, {
+    headers: getAuthHeaders(),
+  });
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(payload.message || '获取 Workflow 执行状态失败');
+  }
+  return payload.execution;
+}
+
+export async function cancelWorkflowExecution(executionId: string): Promise<WorkflowExecution> {
+  const res = await fetch(`${API_BASE}/api/workflows/executions/${executionId}/cancel`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+  });
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(payload.message || '取消 Workflow 执行失败');
+  }
+  return payload.execution;
+}
+
 // ==================== Messages API ====================
 export async function fetchMessagesAPI(): Promise<Message[]> {
   try {
@@ -260,7 +641,7 @@ export async function fetchMessagesAPI(): Promise<Message[]> {
     if (!res.ok) throw new Error('Failed to fetch');
     return await res.json();
   } catch {
-    return mockMessages;
+    return [];
   }
 }
 

@@ -21,13 +21,13 @@ export default function MyArchitecturesPage() {
         className="text-center mb-8 mt-6"
       >
         <h1 className="chinese-large text-pixel-black mb-2">
-          我的架构
+          我的团队
         </h1>
         <p className="font-pixel text-xl text-pixel-blue">
-          MY ARCHITECTURES
+          MY TEAMS
         </p>
         <p className="font-pixel text-sm text-pixel-black/60 mt-2">
-          管理所有已创建的团队架构
+          管理所有已创建的 Agent 团队
         </p>
       </motion.div>
 
@@ -86,7 +86,7 @@ export default function MyArchitecturesPage() {
 
                 <Link href={`/architectures/mine/${arch.id}`}>
                   <PixelButton variant="primary" className="w-full">
-                    打开架构
+                    打开团队
                   </PixelButton>
                 </Link>
               </PixelCard>
@@ -101,15 +101,15 @@ export default function MyArchitecturesPage() {
         >
           <div className="text-6xl mb-4">BUILDING</div>
           <h2 className="chinese-large text-pixel-black mb-4">
-            暂无架构
+            暂无团队
           </h2>
           <p className="font-pixel text-pixel-black/60 mb-6">
-            创建新架构来管理您的Agent团队
+            创建新团队来管理您的 Agent 协作
           </p>
           <div className="flex justify-center gap-4">
             <Link href="/architectures/create">
               <PixelButton variant="primary" size="lg">
-                创建架构
+                创建团队
               </PixelButton>
             </Link>
             <Link href="/architectures/defaults">

@@ -37,13 +37,13 @@ export default function DefaultArchitecturesPage() {
         className="text-center mb-8 mt-6"
       >
         <h1 className="chinese-large text-3xl text-pixel-black mb-2">
-          默认架构模板
+          团队参考模板
         </h1>
         <p className="font-pixel text-xl text-pixel-blue">
-          DEFAULT ARCHITECTURE TEMPLATES
+          TEAM REFERENCE TEMPLATES
         </p>
         <p className="font-pixel text-sm text-pixel-black/60 mt-2">
-          选择一个预设架构，快速启动你的团队协作流程
+          选择一个预设团队，快速启动你的团队协作流程
         </p>
       </motion.div>
 

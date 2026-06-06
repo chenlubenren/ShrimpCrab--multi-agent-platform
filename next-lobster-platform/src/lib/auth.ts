@@ -68,6 +68,7 @@ export interface Agent {
   userId: string;
   sourceMarketAgentId: string | null;
   sourceVersion: string;
+  canEditProfile?: boolean;
   name: string;
   description: string;
   avatar: string;
@@ -153,6 +154,55 @@ export async function updateAgent(
   return request<{ agent: Agent }>(`/api/agents/${id}`, {
     method: 'PATCH',
     body: JSON.stringify(updates),
+  });
+}
+
+export interface ProfileAvatarAsset {
+  filename: string;
+  label: string;
+  url: string;
+}
+
+export async function listProfileAvatars(): Promise<{ files: ProfileAvatarAsset[] }> {
+  return request<{ files: ProfileAvatarAsset[] }>('/api/profile');
+}
+
+export async function uploadAgentAvatarFile(
+  id: string,
+  file: Blob,
+  filename = 'avatar.png'
+): Promise<{ success: boolean; avatarUrl: string }> {
+  const token = getToken();
+  const formData = new FormData();
+  formData.append('avatar', file, filename);
+
+  const res = await fetch(`${BASE_URL}/api/agents/${id}/avatar`, {
+    method: 'POST',
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    body: formData,
+  });
+
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data?.message || '上传头像失败');
+  }
+
+  return data as { success: boolean; avatarUrl: string };
+}
+
+export async function generateAgentAvatar(
+  id: string,
+  prompt: string
+): Promise<{ message: string; reserved?: boolean }> {
+  return request<{ message: string; reserved?: boolean }>(`/api/agents/${id}/avatar/generate`, {
+    method: 'POST',
+    body: JSON.stringify({ prompt }),
+  });
+}
+
+export async function publishAgent(id: string): Promise<{ success: boolean; marketAgentId?: string }> {
+  return request<{ success: boolean; marketAgentId?: string }>(`/api/agents/${id}/market`, {
+    method: 'POST',
   });
 }
 

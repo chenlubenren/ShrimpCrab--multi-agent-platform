@@ -1,11 +1,14 @@
 'use client';
 
-import { useState, useRef, useCallback, useMemo } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { motion } from 'framer-motion';
+import { AnimatePresence, motion } from 'framer-motion';
 import { PixelButton } from '@/components/ui/PixelButton';
-import { PixelInput } from '@/components/ui/PixelInput';
 import { BackButton } from '@/components/ui/BackButton';
+import {
+  UploadAgentSetupDialog,
+  type UploadSetupPayload,
+} from '@/components/agent/UploadAgentSetupDialog';
 import { useAuthStore } from '@/store/useAuthStore';
 import {
   AGENT_TYPE_OPTIONS,
@@ -17,10 +20,9 @@ import {
 
 const BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3002';
 
-type UploadMode = 'folder' | 'zip';
+type FileUploadMode = 'folder' | 'zip';
+type UploadMode = FileUploadMode | 'coze';
 
-// Sensitive patterns to detect API keys, tokens, etc.
-// Only include high-specificity patterns to avoid false positives
 const SENSITIVE_PATTERNS = [
   { name: 'OpenAI API Key', pattern: /sk-[a-zA-Z0-9]{20,}/g },
   { name: 'GitHub Token', pattern: /ghp_[a-zA-Z0-9]{36}|gho_[a-zA-Z0-9]{36}/g },
@@ -36,6 +38,305 @@ interface SensitiveFile {
   type: string;
 }
 
+interface CozeMarketAgent {
+  id: string;
+  botId: string;
+  name: string;
+  description: string;
+  icon: string;
+  coverImage?: string;
+  tags: string[];
+  category: string;
+  creator: string;
+  rating: number;
+  deployCount: number;
+  sourceUrl: string;
+  featured?: boolean;
+}
+
+interface CozeRuntimeInfo {
+  apiBase: string;
+  configured: boolean;
+}
+
+function getCozeAvatar(agent: Pick<CozeMarketAgent, 'icon'>): string {
+  return agent.icon || '/lobsters/lobster-merchant.png';
+}
+
+function TagList({ tags }: { tags: string[] }) {
+  if (tags.length === 0) return null;
+  return (
+    <div className="flex flex-wrap gap-1">
+      {tags.slice(0, 5).map((tag) => (
+        <span key={tag} className="bg-pixel-black/10 px-2 py-1 font-pixel text-[10px] text-pixel-black/70">
+          #{tag}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function CozeSummonTab({ token }: { token: string | null }) {
+  const router = useRouter();
+  const [agents, setAgents] = useState<CozeMarketAgent[]>([]);
+  const [runtime, setRuntime] = useState<CozeRuntimeInfo | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [selectedAgent, setSelectedAgent] = useState<CozeMarketAgent | null>(null);
+  const [deploying, setDeploying] = useState<string | null>(null);
+  const [search, setSearch] = useState('');
+
+  const fetchAgents = useCallback(async (query = search) => {
+    if (!token) {
+      setLoading(false);
+      return;
+    }
+
+    try {
+      setLoading(true);
+      setError(null);
+      const params = new URLSearchParams({ limit: '50' });
+      if (query.trim()) params.set('search', query.trim());
+      const res = await fetch(`${BASE_URL}/api/market/coze?${params.toString()}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.message || '加载跨次元召唤列表失败');
+      setAgents(Array.isArray(data.agents) ? data.agents : []);
+      setRuntime(data.runtime || null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '加载跨次元召唤列表失败');
+    } finally {
+      setLoading(false);
+    }
+  }, [search, token]);
+
+  useEffect(() => {
+    void fetchAgents('');
+    // Search uses the explicit button below.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token]);
+
+  const handleDeploy = async (agent: CozeMarketAgent) => {
+    if (!token) return;
+
+    try {
+      setDeploying(agent.botId);
+      const res = await fetch(`${BASE_URL}/api/market/coze/${encodeURIComponent(agent.botId)}/deploy`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.message || '召唤 Coze Agent 失败');
+      setSelectedAgent(null);
+      if (!data.runtime?.configured) {
+        alert('已召唤。当前后端还未配置 COZE_API_TOKEN，配置后即可真实调用 Coze。');
+      }
+      if (typeof data.agentId === 'string') {
+        router.push(`/agent/${data.agentId}`);
+      }
+    } catch (err) {
+      alert(err instanceof Error ? err.message : '召唤 Coze Agent 失败');
+    } finally {
+      setDeploying(null);
+    }
+  };
+
+  if (!token) {
+    return (
+      <div className="border-4 border-pixel-black bg-pixel-black/5 p-8 text-center">
+        <p className="font-pixel text-lg text-pixel-black">请先登录</p>
+        <p className="mt-2 font-pixel text-sm text-pixel-black/60">
+          登录后可以把 Coze 等平台的 API Agent 召唤成本平台可部署 Agent。
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="border-4 border-pixel-black bg-pixel-white p-4" style={{ boxShadow: '4px 4px 0 #101010' }}>
+        <div className="flex flex-col gap-3 md:flex-row md:items-center">
+          <div className="flex min-w-0 flex-1">
+            <input
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') void fetchAgents();
+              }}
+              placeholder="搜索 Coze Agent"
+              className="min-w-0 flex-1 border-2 border-pixel-black px-3 py-2 font-pixel text-sm outline-none"
+            />
+            <button
+              type="button"
+              onClick={() => void fetchAgents()}
+              className="border-y-2 border-r-2 border-pixel-black bg-pixel-black px-4 py-2 font-pixel text-sm text-pixel-white"
+            >
+              搜索
+            </button>
+          </div>
+          <div className={`border-2 px-3 py-2 font-pixel text-xs ${runtime?.configured ? 'border-pixel-green text-pixel-green' : 'border-pixel-black text-pixel-black/60'}`}>
+            {runtime?.configured ? 'Coze API 已连接' : '待配置 COZE_API_TOKEN'}
+          </div>
+        </div>
+      </div>
+
+      {loading && <div className="py-16 text-center font-pixel text-lg text-pixel-black/60">加载中...</div>}
+
+      {!loading && error && (
+        <div className="py-16 text-center">
+          <p className="mb-4 font-pixel text-red-500">{error}</p>
+          <button
+            type="button"
+            onClick={() => void fetchAgents()}
+            className="border-2 border-pixel-black bg-pixel-black px-6 py-2 font-pixel text-pixel-white"
+          >
+            重试
+          </button>
+        </div>
+      )}
+
+      {!loading && !error && agents.length === 0 && (
+        <div className="py-16 text-center">
+          <p className="mb-2 font-pixel text-xl text-pixel-black/60">暂无可召唤 Agent</p>
+          <p className="font-pixel text-sm text-pixel-black/40">请在后端配置 COZE_MARKET_BOTS。</p>
+        </div>
+      )}
+
+      {!loading && !error && agents.length > 0 && (
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+          {agents.map((agent, index) => (
+            <motion.button
+              type="button"
+              key={`${agent.botId}-${agent.id}`}
+              initial={{ opacity: 0, y: 16 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: index * 0.04 }}
+              className="group text-left"
+              onClick={() => setSelectedAgent(agent)}
+            >
+              <div className="relative overflow-hidden border-2 border-pixel-black bg-pixel-black transition-transform hover:-translate-y-1">
+                <div className="absolute left-2 top-2 z-10 border-2 border-pixel-black bg-pixel-yellow px-2 py-1 font-pixel text-[10px] font-bold text-pixel-black">
+                  Coze
+                </div>
+                <div className="flex aspect-[5/3] items-center justify-center bg-pixel-white p-4">
+                  <img
+                    src={getCozeAvatar(agent)}
+                    alt={agent.name}
+                    className="h-full w-full object-contain"
+                    style={{ imageRendering: 'pixelated' }}
+                    onError={(event) => {
+                      event.currentTarget.src = '/lobsters/lobster-merchant.png';
+                    }}
+                  />
+                </div>
+                <div className="border-t-2 border-pixel-black bg-pixel-white p-3">
+                  <h3 className="truncate font-pixel text-sm font-bold text-pixel-black">{agent.name}</h3>
+                  <p className="mt-1 line-clamp-2 min-h-[2rem] font-pixel text-xs leading-relaxed text-pixel-black/60">{agent.description}</p>
+                  <div className="mt-2 flex items-center justify-between gap-2 font-pixel text-xs text-pixel-black/60">
+                    <span className="truncate">{agent.category}</span>
+                    <span>{agent.rating.toFixed(1)} / {agent.deployCount}</span>
+                  </div>
+                </div>
+              </div>
+            </motion.button>
+          ))}
+        </div>
+      )}
+
+      <AnimatePresence>
+        {selectedAgent && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+            onClick={() => setSelectedAgent(null)}
+          >
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="w-full max-w-xl border-4 border-pixel-black bg-pixel-white"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="p-5">
+                <div className="flex items-start gap-4">
+                  <div className="flex h-24 w-24 flex-shrink-0 items-center justify-center bg-pixel-black">
+                    <img src={getCozeAvatar(selectedAgent)} alt={selectedAgent.name} className="h-20 w-20 object-contain" style={{ imageRendering: 'pixelated' }} />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="mb-2 inline-flex border-2 border-pixel-black bg-pixel-yellow px-2 py-1 font-pixel text-[10px] font-bold text-pixel-black">
+                      跨次元召唤
+                    </div>
+                    <h2 className="font-pixel text-xl font-bold text-pixel-black">{selectedAgent.name}</h2>
+                    <p className="mt-1 font-pixel text-sm text-pixel-black/60">By {selectedAgent.creator} · {selectedAgent.category}</p>
+                    <p className="mt-2 font-pixel text-sm leading-relaxed text-pixel-black/80">{selectedAgent.description}</p>
+                  </div>
+                </div>
+
+                <div className="mt-4">
+                  <TagList tags={selectedAgent.tags} />
+                </div>
+
+                <div className="mt-4 border-2 border-pixel-black bg-pixel-black/5 p-3 font-pixel text-xs leading-relaxed text-pixel-black/70">
+                  召唤后会在“我的 Agent”中生成一个 Coze API 后端 Agent，并统一使用跨平台形象。聊天时由后端使用 COZE_API_TOKEN 调用 Coze Chat API。
+                </div>
+              </div>
+              <div className="flex gap-3 bg-pixel-black p-4">
+                <button onClick={() => setSelectedAgent(null)} className="flex-1 border-2 border-pixel-white bg-pixel-white py-3 font-pixel font-bold text-pixel-black">
+                  关闭
+                </button>
+                <a
+                  href={selectedAgent.sourceUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="flex-1 border-2 border-pixel-white bg-pixel-white py-3 text-center font-pixel font-bold text-pixel-black"
+                >
+                  查看 Coze
+                </a>
+                <button
+                  onClick={() => void handleDeploy(selectedAgent)}
+                  disabled={deploying === selectedAgent.botId}
+                  className="flex-1 border-2 border-pixel-green bg-pixel-green py-3 font-pixel font-bold text-pixel-white disabled:opacity-50"
+                >
+                  {deploying === selectedAgent.botId ? '召唤中...' : '召唤为 Agent'}
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+function UploadGlyph({ mode, selected = false }: { mode: FileUploadMode; selected?: boolean }) {
+  const className = selected
+    ? 'h-16 w-16 text-pixel-black'
+    : 'h-16 w-16 text-pixel-black/50';
+
+  if (mode === 'folder') {
+    return (
+      <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
+        <path
+          fill="currentColor"
+          d="M3 6h7l2 2h9v10c0 1.1-.9 2-2 2H5c-1.1 0-2-.9-2-2V6zm2 4v8h14v-8H5z"
+        />
+      </svg>
+    );
+  }
+
+  return (
+    <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
+      <path
+        fill="currentColor"
+        d="M6 2h9l5 5v15H6V2zm8 1v5h5M9 12h6v2H9v-2zm0 4h6v2H9v-2z"
+      />
+    </svg>
+  );
+}
+
 function fileToBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -48,41 +349,46 @@ function fileToBase64(file: File): Promise<string> {
   });
 }
 
-// Scan files for sensitive information
 async function scanForSensitiveInfo(files: File[]): Promise<SensitiveFile[]> {
   const sensitiveFiles: SensitiveFile[] = [];
-  const sensitiveFileNames = [
-    '.env',
+  const sensitivePathPatterns = [
+    { type: 'Environment file', pattern: /(^|\/)\.env($|[./])/i },
+    { type: 'Git history folder', pattern: /(^|\/)\.git($|\/)/i },
+    { type: 'Private key file', pattern: /(^|\/)(id_rsa|id_ed25519|id_ecdsa|.*\.(pem|key|p12|pfx|pkcs8))$/i },
+    { type: 'Credential file', pattern: /(^|\/)(secrets?|credentials?|tokens?|api[_-]?keys?)\.(json|ya?ml|toml|ini|env|txt)$/i },
+    { type: 'Agent config may contain secrets', pattern: /(^|\/)agent\.config\.json$/i },
+    { type: 'OpenClaw auth profile', pattern: /(^|\/)auth-profiles\.json$/i },
+    { type: 'Codex auth config', pattern: /(^|\/)\.codex\/(auth|credentials)\.(json|toml)$/i },
+    { type: 'Claude local settings', pattern: /(^|\/)\.claude\/settings\.local\.json$/i },
   ];
 
   for (const file of files) {
-    // Check filename first
+    const relativePath = (file.webkitRelativePath || file.name).replace(/\\/g, '/');
     const fileName = file.name.toLowerCase();
-    if (sensitiveFileNames.some(name => fileName.includes(name.toLowerCase()))) {
-      sensitiveFiles.push({ path: file.webkitRelativePath || file.name, type: '文件名包含敏感关键词' });
+    const lowerPath = relativePath.toLowerCase();
+
+    const pathRisk = sensitivePathPatterns.find(({ pattern }) => pattern.test(lowerPath));
+    if (pathRisk) {
+      sensitiveFiles.push({ path: relativePath, type: pathRisk.type });
       continue;
     }
 
-    // Check file extension
     const ext = fileName.split('.').pop()?.toLowerCase();
-    if (['env', 'pem', 'key', 'pkcs8'].includes(ext || '')) {
-      sensitiveFiles.push({ path: file.webkitRelativePath || file.name, type: '敏感文件类型' });
-      continue;
-    }
-
-    // For smaller text files, scan content
-    if (file.size < 100 * 1024 && ['ts', 'tsx', 'js', 'jsx', 'json', 'txt', 'md', 'yml', 'yaml', 'toml', 'ini', 'conf'].includes(ext || '')) {
+    if (
+      file.size < 100 * 1024 &&
+      ['ts', 'tsx', 'js', 'jsx', 'json', 'txt', 'md', 'yml', 'yaml', 'toml', 'ini', 'conf'].includes(ext || '')
+    ) {
       try {
         const content = await file.text();
         for (const { name, pattern } of SENSITIVE_PATTERNS) {
           if (pattern.test(content)) {
-            sensitiveFiles.push({ path: file.webkitRelativePath || file.name, type: `可能包含 ${name}` });
-            pattern.lastIndex = 0; // Reset regex
+            sensitiveFiles.push({ path: relativePath, type: `May contain ${name}` });
+            pattern.lastIndex = 0;
             break;
           }
         }
       } catch {
-        // Skip files that can't be read as text
+        // ignore read errors
       }
     }
   }
@@ -104,8 +410,9 @@ export default function UploadPage() {
   const [uploadProgress, setUploadProgress] = useState(0);
   const [lobsterName, setLobsterName] = useState('');
   const [error, setError] = useState('');
+  const [successMessage, setSuccessMessage] = useState('');
+  const [setupPanelOpen, setSetupPanelOpen] = useState(false);
 
-  // New: publish to market toggle
   const [publishToMarket, setPublishToMarket] = useState(false);
   const [sensitiveFiles, setSensitiveFiles] = useState<SensitiveFile[]>([]);
   const [showSensitiveWarning, setShowSensitiveWarning] = useState(false);
@@ -116,16 +423,49 @@ export default function UploadPage() {
   const [isDetecting, setIsDetecting] = useState(false);
   const [forceManualType, setForceManualType] = useState(false);
 
-  const hasSelection =
-    uploadMode === 'folder' ? selectedFolderFiles.length > 0 : !!selectedFile;
+  const fileUploadMode: FileUploadMode | null =
+    uploadMode === 'folder' || uploadMode === 'zip' ? uploadMode : null;
+  const isFileUploadMode = fileUploadMode !== null;
+  const hasSelection = uploadMode === 'folder'
+    ? selectedFolderFiles.length > 0
+    : uploadMode === 'zip'
+      ? !!selectedFile
+      : false;
+  const totalFolderSize = selectedFolderFiles.reduce((sum, file) => sum + file.size, 0);
 
-  const totalFolderSize = selectedFolderFiles.reduce((sum, f) => sum + f.size, 0);
-
-  const resetTypeState = () => {
+  const resetTypeState = useCallback(() => {
     setDetection(null);
     setSelectedAgentType(null);
     setForceManualType(false);
-  };
+  }, []);
+
+  const resetSetupLaunchState = useCallback(() => {
+    setSetupPanelOpen(false);
+    setSuccessMessage('');
+  }, []);
+
+  const resetSelectionState = useCallback(() => {
+    setSelectedFile(null);
+    setSelectedFolderFiles([]);
+    setFolderName('');
+    setError('');
+    setSensitiveFiles([]);
+    setShowSensitiveWarning(false);
+    resetTypeState();
+    resetSetupLaunchState();
+  }, [resetSetupLaunchState, resetTypeState]);
+
+  const effectiveAgentType: AgentPlatformType | null =
+    selectedAgentType ||
+    (!forceManualType && detection?.confidence === 'high' ? detection.detected : null);
+
+  const showTypePicker =
+    hasSelection &&
+    (forceManualType ||
+      uploadMode === 'zip' ||
+      (isDetecting === false && (detection?.confidence !== 'high' || !effectiveAgentType)));
+
+  const hasMarketSanitizationNotice = publishToMarket && sensitiveFiles.length > 0;
 
   const runDetection = useCallback(async (files: File[]) => {
     setIsDetecting(true);
@@ -142,101 +482,103 @@ export default function UploadPage() {
     }
   }, []);
 
-  const handleZipSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
+  const handleZipSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
     if (!file) return;
-    if (!file.name.endsWith('.zip')) {
-      setError('zip 模式只支持 .zip 文件');
+    if (!file.name.toLowerCase().endsWith('.zip')) {
+      setError('zip 模式只支持 .zip 文件。');
       return;
     }
+
     setSelectedFile(file);
     setSelectedFolderFiles([]);
     setError('');
+    setSuccessMessage('');
     setSensitiveFiles([]);
     setShowSensitiveWarning(false);
     resetTypeState();
+    resetSetupLaunchState();
     setDetection({ detected: null, confidence: 'none', scores: {} });
-    if (!lobsterName) {
-      setLobsterName(file.name.replace(/\.[^/.]+$/, ''));
-    }
+
+    setLobsterName(file.name.replace(/\.[^/.]+$/, ''));
+    setSetupPanelOpen(true);
   };
 
-  const handleFolderSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const fileList = e.target.files;
+  const handleFolderSelect = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const fileList = event.target.files;
     if (!fileList || fileList.length === 0) return;
 
     const files = Array.from(fileList);
     setSelectedFolderFiles(files);
     setSelectedFile(null);
     setError('');
+    setSuccessMessage('');
     setSensitiveFiles([]);
     setShowSensitiveWarning(false);
     resetTypeState();
+    resetSetupLaunchState();
 
     const firstPath = files[0].webkitRelativePath || files[0].name;
     const rootFolder = firstPath.split('/')[0] || 'my-agent';
     setFolderName(rootFolder);
-    if (!lobsterName) {
-      setLobsterName(rootFolder);
-    }
 
+    setLobsterName(rootFolder);
+
+    setSetupPanelOpen(true);
     await runDetection(files);
 
-    // Scan for sensitive information when publishing to market
     if (publishToMarket) {
       setIsScanning(true);
       const sensitive = await scanForSensitiveInfo(files);
       setSensitiveFiles(sensitive);
-      if (sensitive.length > 0) {
-        setShowSensitiveWarning(true);
-      }
+      setShowSensitiveWarning(sensitive.length > 0);
       setIsScanning(false);
     }
   };
 
-  // Scan when publish toggle changes
   const handlePublishToggle = async (checked: boolean) => {
     setPublishToMarket(checked);
+
     if (checked && selectedFolderFiles.length > 0) {
       setIsScanning(true);
       const sensitive = await scanForSensitiveInfo(selectedFolderFiles);
       setSensitiveFiles(sensitive);
-      if (sensitive.length > 0) {
-        setShowSensitiveWarning(true);
-      }
+      setShowSensitiveWarning(sensitive.length > 0);
       setIsScanning(false);
-    } else {
-      setSensitiveFiles([]);
-      setShowSensitiveWarning(false);
+      return;
     }
+
+    setSensitiveFiles([]);
+    setShowSensitiveWarning(false);
   };
 
-  const effectiveAgentType: AgentPlatformType | null =
-    selectedAgentType ||
-    (!forceManualType && detection?.confidence === 'high' ? detection.detected : null);
+  const handleUpload = async (setup?: UploadSetupPayload) => {
+    if (isUploading || isDetecting || isScanning) return;
+    if (uploadMode === 'coze') return;
+    if (!lobsterName.trim()) {
+      setError('请填写 Agent 名称。');
+      return;
+    }
+    if (uploadMode === 'folder' && selectedFolderFiles.length === 0) {
+      setError('请选择要上传的文件夹。');
+      return;
+    }
+    if (uploadMode === 'zip' && !selectedFile) {
+      setError('请选择要上传的 zip 文件。');
+      return;
+    }
 
-  const showTypePicker =
-    hasSelection &&
-    (forceManualType ||
-      uploadMode === 'zip' ||
-      (isDetecting === false &&
-        (detection?.confidence !== 'high' || !effectiveAgentType)));
-
-  const handleUpload = async () => {
-    if (!lobsterName.trim()) return;
-    if (uploadMode === 'folder' && selectedFolderFiles.length === 0) return;
-    if (uploadMode === 'zip' && !selectedFile) return;
     if (!effectiveAgentType) {
-      setError('请选择 Agent 平台类型');
+      setError('请选择 Agent 平台类型。');
       return;
     }
     if (!token) {
-      setError('请先登录');
+      setError('请先登录。');
       return;
     }
-
     setIsUploading(true);
     setError('');
+    setSuccessMessage('');
     setUploadProgress(0);
 
     try {
@@ -245,20 +587,25 @@ export default function UploadPage() {
       if (uploadMode === 'folder') {
         setUploadProgress(10);
         const files: { path: string; content: string }[] = [];
-        for (let i = 0; i < selectedFolderFiles.length; i++) {
-          const f = selectedFolderFiles[i];
+
+        for (let index = 0; index < selectedFolderFiles.length; index += 1) {
+          const file = selectedFolderFiles[index];
           files.push({
-            path: f.webkitRelativePath || f.name,
-            content: await fileToBase64(f),
+            path: file.webkitRelativePath || file.name,
+            content: await fileToBase64(file),
           });
-          setUploadProgress(10 + Math.floor((i / selectedFolderFiles.length) * 50));
+          setUploadProgress(10 + Math.floor((index / selectedFolderFiles.length) * 50));
         }
+
         body = {
           uploadType: 'folder',
           name: lobsterName.trim(),
           agentType: effectiveAgentType,
           files,
           publishToMarket,
+          deferMarketPublish: false,
+          description: setup?.description,
+          avatar: setup?.avatar,
         };
       } else {
         body = {
@@ -268,11 +615,15 @@ export default function UploadPage() {
           file: await fileToBase64(selectedFile!),
           fileName: selectedFile!.name,
           publishToMarket,
+          deferMarketPublish: false,
+          description: setup?.description,
+          avatar: setup?.avatar,
         };
         setUploadProgress(40);
       }
 
       setUploadProgress(70);
+
       const response = await fetch(`${BASE_URL}/api/upload`, {
         method: 'POST',
         headers: {
@@ -284,132 +635,216 @@ export default function UploadPage() {
 
       setUploadProgress(90);
       const data = await response.json();
-      if (!response.ok) throw new Error(data.message || '上传失败');
+      if (!response.ok) {
+        throw new Error(data.message || '上传失败。');
+      }
 
       setUploadProgress(100);
-      setTimeout(() => router.push('/my-den'), 500);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : '上传失败，请重试');
+
+      const nextPath = data.agentId ? `/agent/${data.agentId}` : '/my-den';
+
+      if (data.agentId) {
+        setSuccessMessage('上传完成。');
+        setSetupPanelOpen(false);
+      }
+      router.push(nextPath);
+    } catch (uploadError) {
+      setError(uploadError instanceof Error ? uploadError.message : '上传失败，请重试。');
+    } finally {
       setIsUploading(false);
-      setUploadProgress(0);
     }
+  };
+
+  const setupButtonLabel = 'Agent形象设置';
+  const setupButtonDisabled = !hasSelection || isUploading;
+  const handleSetupButtonClick = () => {
+    if (setupButtonDisabled) return;
+    setSetupPanelOpen(true);
   };
 
   return (
     <motion.div
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
-      className="max-w-2xl mx-auto pb-16"
+      className={`mx-auto pb-16 ${uploadMode === 'coze' ? 'max-w-5xl' : 'max-w-2xl'}`}
     >
       <BackButton href="/" />
 
       <div
-        className="bg-pixel-white border-4 border-pixel-black p-6 mt-6"
+        className="mt-6 border-4 border-pixel-black bg-pixel-white p-6"
         style={{ boxShadow: '8px 8px 0px 0px #101010' }}
       >
-        <h1 className="font-pixel text-3xl text-pixel-black text-center mb-2">上传 Agent</h1>
-        <p className="font-pixel text-sm text-pixel-black/60 text-center mb-6">
-          支持文件夹上传，自动识别 Claude Code / Codex / OpenCode / OpenClaw / Hermes
+        <h1 className="mb-2 text-center font-pixel text-3xl text-pixel-black">上传 Agent</h1>
+        <p className="mb-6 text-center font-pixel text-sm text-pixel-black/60">
+          选择文件夹或 zip 包后会先打开 Agent 形象设置，完成设置后再上传到后端。
         </p>
 
-        <motion.div className="flex gap-2 mb-6">
-          {(['folder', 'zip'] as UploadMode[]).map((mode) => (
+        <motion.div className="mb-6 flex gap-2">
+          {(['folder', 'zip', 'coze'] as UploadMode[]).map((mode) => (
             <button
               key={mode}
               type="button"
               onClick={() => {
                 setUploadMode(mode);
-                setSelectedFile(null);
-                setSelectedFolderFiles([]);
-                setSensitiveFiles([]);
-                setShowSensitiveWarning(false);
-                resetTypeState();
-                setError('');
+                resetSelectionState();
               }}
               disabled={isUploading}
-              className={`flex-1 py-2 font-pixel text-sm border-4 border-pixel-black ${
+              className={`flex-1 border-4 border-pixel-black py-2 font-pixel text-sm ${
                 uploadMode === mode
                   ? mode === 'folder'
                     ? 'bg-pixel-green text-pixel-white'
-                    : 'bg-pixel-blue text-pixel-white'
+                    : mode === 'zip'
+                      ? 'bg-pixel-blue text-pixel-white'
+                      : 'bg-pixel-yellow text-pixel-black'
                   : 'bg-pixel-white text-pixel-black'
               }`}
               style={{ boxShadow: '3px 3px 0 #101010' }}
             >
-              {mode === 'folder' ? '📁 上传文件夹' : '📦 上传 zip'}
+              {mode === 'folder' ? '上传文件夹' : mode === 'zip' ? '上传 zip' : '跨次元召唤'}
             </button>
           ))}
         </motion.div>
 
         {error && (
-          <div className="bg-pixel-red/10 border-4 border-pixel-red p-3 mb-6">
-            <p className="font-pixel text-pixel-red text-sm">{error}</p>
+          <div className="mb-6 border-4 border-pixel-red bg-pixel-red/10 p-3">
+            <p className="font-pixel text-sm text-pixel-red">{error}</p>
           </div>
         )}
 
-        <div
-          className={`border-4 border-dashed cursor-pointer p-8 text-center mb-6 ${
-            hasSelection ? 'border-pixel-green bg-pixel-green/10' : 'border-pixel-black'
-          } ${isUploading ? 'opacity-50 pointer-events-none' : ''}`}
-          onClick={() => {
-            if (isUploading) return;
-            (uploadMode === 'folder' ? folderInputRef : fileInputRef).current?.click();
-          }}
-        >
-          <input
-            ref={folderInputRef}
-            type="file"
-            // @ts-expect-error webkitdirectory
-            webkitdirectory=""
-            directory=""
-            multiple
-            onChange={handleFolderSelect}
-            className="hidden"
-          />
-          <input ref={fileInputRef} type="file" accept=".zip" onChange={handleZipSelect} className="hidden" />
+        {successMessage && (
+          <div className="mb-6 border-4 border-pixel-green bg-pixel-green/10 p-3">
+            <p className="font-pixel text-sm text-pixel-green">{successMessage}</p>
+          </div>
+        )}
 
-          {uploadMode === 'folder' ? (
-            selectedFolderFiles.length > 0 ? (
+        {uploadMode === 'coze' ? (
+          <CozeSummonTab token={token} />
+        ) : (
+          <div
+            className={`mb-6 cursor-pointer border-4 border-dashed p-8 text-center ${
+              hasSelection ? 'border-pixel-green bg-pixel-green/10' : 'border-pixel-black'
+            } ${isUploading ? 'pointer-events-none opacity-50' : ''}`}
+            onClick={() => {
+              if (isUploading) return;
+              (uploadMode === 'folder' ? folderInputRef : fileInputRef).current?.click();
+            }}
+          >
+            <input
+              ref={folderInputRef}
+              type="file"
+              // @ts-expect-error webkitdirectory
+              webkitdirectory=""
+              directory=""
+              multiple
+              onChange={handleFolderSelect}
+              className="hidden"
+            />
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".zip"
+              onChange={handleZipSelect}
+              className="hidden"
+            />
+
+            {uploadMode === 'folder' ? (
+              selectedFolderFiles.length > 0 ? (
+                <div>
+                  <motion.div
+                    className="mb-3 flex justify-center"
+                    animate={{ y: [0, -4, 0] }}
+                    transition={{ duration: 1.5, repeat: Infinity }}
+                  >
+                    <UploadGlyph mode="folder" selected />
+                  </motion.div>
+                  <p className="font-pixel text-lg text-pixel-black">{folderName}</p>
+                  <p className="mt-2 font-pixel text-sm text-pixel-black/60">
+                    {selectedFolderFiles.length} 个文件 · {(totalFolderSize / 1024).toFixed(1)} KB · 点击更换文件夹
+                  </p>
+                </div>
+              ) : (
+                <div>
+                  <div className="mb-4 flex justify-center">
+                    <UploadGlyph mode="folder" />
+                  </div>
+                  <p className="mb-1 font-pixel font-bold text-pixel-black">点击选择文件夹</p>
+                  <p className="font-pixel text-sm text-pixel-black/60">
+                    支持 Claude Code / Codex / OpenCode / OpenClaw / Hermes 工作区
+                  </p>
+                </div>
+              )
+            ) : selectedFile ? (
               <div>
-                <div className="text-5xl mb-3">📁</div>
-                <p className="font-pixel text-lg">{folderName}</p>
-                <p className="font-pixel text-sm text-pixel-black/60 mt-2">
-                  {selectedFolderFiles.length} 个文件 · {(totalFolderSize / 1024).toFixed(1)} KB
+                <motion.div
+                  className="mb-3 flex justify-center"
+                  animate={{ y: [0, -4, 0] }}
+                  transition={{ duration: 1.5, repeat: Infinity }}
+                >
+                  <UploadGlyph mode="zip" selected />
+                </motion.div>
+                <p className="font-pixel text-lg text-pixel-black">{selectedFile.name}</p>
+                <p className="mt-2 font-pixel text-sm text-pixel-black/60">
+                  {(selectedFile.size / 1024).toFixed(1)} KB · 点击更换文件
                 </p>
               </div>
             ) : (
               <div>
-                <div className="text-5xl mb-4">📁</div>
-                <p className="font-pixel font-bold">点击选择文件夹</p>
+                <div className="mb-4 flex justify-center">
+                  <UploadGlyph mode="zip" />
+                </div>
+                <p className="mb-1 font-pixel font-bold text-pixel-black">点击选择 zip</p>
+                <p className="font-pixel text-sm text-pixel-black/60">
+                  支持 .zip 格式
+                </p>
               </div>
-            )
-          ) : selectedFile ? (
-            <div>
-              <div className="text-5xl mb-3">📦</div>
-              <p className="font-pixel text-lg">{selectedFile.name}</p>
-            </div>
-          ) : (
-            <div>
-              <div className="text-5xl mb-4">📦</div>
-              <p className="font-pixel font-bold">点击选择 zip</p>
-            </div>
-          )}
-        </div>
+            )}
+          </div>
+        )}
 
         {hasSelection && (
           <div
-            className="mb-6 border-4 border-pixel-black p-4 bg-pixel-white/80"
+            className="mb-6 border-4 border-pixel-black bg-pixel-white/80 p-4"
             style={{ boxShadow: '4px 4px 0 #101010' }}
           >
-            <p className="font-pixel text-sm font-bold mb-3">Agent 平台类型</p>
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="font-pixel text-sm font-bold text-pixel-black">Agent形象设置</p>
+                <p className="mt-1 font-pixel text-xs text-pixel-black/60">
+                  选择文件后会自动打开。关闭后，也可以点击右侧按钮继续设置。
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={handleSetupButtonClick}
+                disabled={setupButtonDisabled}
+                aria-label="打开 Agent 形象设置"
+                className={`border-4 border-pixel-black px-4 py-2 font-pixel text-xs ${
+                  setupButtonDisabled
+                    ? 'bg-pixel-black/10 text-pixel-black/50'
+                    : 'bg-pixel-yellow text-pixel-black hover:bg-pixel-orange'
+                }`}
+                style={{ boxShadow: '3px 3px 0 #101010' }}
+              >
+                {setupButtonLabel}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {hasSelection && (
+          <div
+            className="mb-6 border-4 border-pixel-black bg-pixel-white/80 p-4"
+            style={{ boxShadow: '4px 4px 0 #101010' }}
+          >
+            <p className="mb-3 font-pixel text-sm font-bold text-pixel-black">Agent 平台类型</p>
 
             {isDetecting ? (
-              <p className="font-pixel text-xs text-pixel-black/60">正在识别...</p>
+              <p className="font-pixel text-xs text-pixel-black/60">正在识别工作区类型...</p>
             ) : effectiveAgentType && !forceManualType ? (
-              <motion.div className="flex items-center justify-between gap-2 flex-wrap">
+              <motion.div className="flex flex-wrap items-center justify-between gap-2">
                 <span className="font-pixel text-sm text-pixel-green">
-                  ✓ 已识别：{getAgentTypeLabel(effectiveAgentType)}
-                  {detection?.confidence === 'high' && !selectedAgentType && '（自动）'}
+                  已识别：{getAgentTypeLabel(effectiveAgentType)}
+                  {detection?.confidence === 'high' && !selectedAgentType ? '（自动）' : ''}
                 </span>
                 <button
                   type="button"
@@ -423,70 +858,64 @@ export default function UploadPage() {
                 </button>
               </motion.div>
             ) : (
-              <p className="font-pixel text-xs text-pixel-black/60 mb-3">
+              <p className="mb-3 font-pixel text-xs text-pixel-black/60">
                 {detection?.confidence === 'low' && detection.detected
-                  ? `疑似 ${getAgentTypeLabel(detection.detected)}，请确认类型`
+                  ? `疑似 ${getAgentTypeLabel(detection.detected)}，请确认类型。`
                   : uploadMode === 'zip'
-                    ? 'zip 包无法自动识别，请手动选择类型'
-                    : '未能自动识别，请手动选择类型'}
+                    ? 'zip 包无法可靠自动识别，请手动选择平台类型。'
+                    : '未能自动锁定平台类型，请手动选择。'}
               </p>
             )}
 
             {showTypePicker && !isDetecting && (
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mt-2">
-                {AGENT_TYPE_OPTIONS.map((opt) => (
-                  <button
-                    key={opt.id}
-                    type="button"
-                    onClick={() => setSelectedAgentType(opt.id)}
-                    className={`py-2 px-2 font-pixel text-xs border-4 border-pixel-black ${
-                      selectedAgentType === opt.id ||
-                      (!selectedAgentType &&
-                        detection?.detected === opt.id &&
-                        detection.confidence === 'low')
-                        ? 'bg-pixel-yellow text-pixel-black'
-                        : 'bg-pixel-white hover:bg-pixel-gray/30'
-                    }`}
-                    style={{
-                      boxShadow:
-                        selectedAgentType === opt.id ? '3px 3px 0 #101010' : '2px 2px 0 #101010',
-                    }}
-                  >
-                    {opt.label}
-                  </button>
-                ))}
+              <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3">
+                {AGENT_TYPE_OPTIONS.map((option) => {
+                  const isSelected =
+                    selectedAgentType === option.id ||
+                    (!selectedAgentType && detection?.detected === option.id && detection.confidence === 'low');
+
+                  return (
+                    <button
+                      key={option.id}
+                      type="button"
+                      onClick={() => setSelectedAgentType(option.id)}
+                      className={`border-4 border-pixel-black px-2 py-2 font-pixel text-xs ${
+                        isSelected ? 'bg-pixel-yellow text-pixel-black' : 'bg-pixel-white text-pixel-black hover:bg-pixel-gray/30'
+                      }`}
+                      style={{ boxShadow: isSelected ? '3px 3px 0 #101010' : '2px 2px 0 #101010' }}
+                    >
+                      {option.label}
+                    </button>
+                  );
+                })}
               </div>
             )}
           </div>
         )}
 
-        {/* Publish to Market Toggle */}
         {hasSelection && (
           <div
-            className="mb-6 border-4 border-pixel-black p-4 bg-pixel-cream/50"
+            className="mb-6 border-4 border-pixel-black bg-pixel-cream/50 p-4"
             style={{ boxShadow: '4px 4px 0 #101010' }}
           >
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between gap-4">
               <div>
-                <p className="font-pixel text-sm font-bold flex items-center gap-2">
-                  <span className="text-xl">🏪</span>
-                  发布到 Agent 市场
-                </p>
-                <p className="font-pixel text-xs text-pixel-black/60 mt-1">
-                  公开你的 Agent，让其他用户可以发现并使用
+                <p className="font-pixel text-sm font-bold text-pixel-black">发布到 Agent 市场</p>
+                <p className="mt-1 font-pixel text-xs text-pixel-black/60">
+                  公开你的 Agent，让其他用户可以发现并使用。市场副本会自动跳过或脱敏敏感配置。
                 </p>
               </div>
               <button
                 type="button"
-                onClick={() => handlePublishToggle(!publishToMarket)}
+                onClick={() => void handlePublishToggle(!publishToMarket)}
                 disabled={isUploading || isScanning}
-                className={`relative w-14 h-7 border-4 border-pixel-black transition-colors ${
+                className={`relative h-7 w-14 border-4 border-pixel-black transition-colors ${
                   publishToMarket ? 'bg-pixel-green' : 'bg-pixel-black/20'
                 }`}
                 style={{ boxShadow: '2px 2px 0 #101010' }}
               >
                 <motion.div
-                  className="absolute top-0 w-5 h-5 bg-pixel-white border-2 border-pixel-black"
+                  className="absolute top-0 h-5 w-5 border-2 border-pixel-black bg-pixel-white"
                   animate={{ left: publishToMarket ? 28 : 2 }}
                   transition={{ type: 'spring', stiffness: 500, damping: 30 }}
                   style={{ top: '50%', transform: 'translateY(-50%)' }}
@@ -494,90 +923,95 @@ export default function UploadPage() {
               </button>
             </div>
 
-            {/* Scanning indicator */}
             {isScanning && (
               <div className="mt-3 flex items-center gap-2">
-                <div className="animate-spin w-4 h-4 border-2 border-pixel-black border-t-transparent rounded-full" />
-                <span className="font-pixel text-xs text-pixel-black/60">正在扫描敏感信息...</span>
+                <div className="h-4 w-4 animate-spin rounded-full border-2 border-pixel-black border-t-transparent" />
+                <span className="font-pixel text-xs text-pixel-black/60">正在扫描敏感文件...</span>
               </div>
             )}
 
-            {/* Sensitive info warning */}
             {showSensitiveWarning && sensitiveFiles.length > 0 && publishToMarket && !isScanning && (
               <motion.div
                 initial={{ opacity: 0, height: 0 }}
                 animate={{ opacity: 1, height: 'auto' }}
-                className="mt-4 p-3 bg-pixel-yellow/20 border-4 border-pixel-yellow"
+                className="mt-4 border-4 border-pixel-yellow bg-pixel-yellow/20 p-3"
               >
-                <div className="flex items-start gap-2">
-                  <span className="text-xl">⚠️</span>
-                  <div>
-                    <p className="font-pixel text-sm text-pixel-black font-bold">
-                      检测到您上传的文件夹中包含敏感信息
-                    </p>
-                    <p className="font-pixel text-xs text-pixel-black/70 mt-1">
-                      上传到 Agent 市场时，会自动去除这些信息以保障安全：
-                    </p>
-                    <ul className="mt-2 space-y-1">
-                      {sensitiveFiles.slice(0, 5).map((sf, i) => (
-                        <li key={i} className="font-mono text-xs text-pixel-black/80">
-                          • {sf.path} <span className="text-pixel-yellow">({sf.type})</span>
-                        </li>
-                      ))}
-                      {sensitiveFiles.length > 5 && (
-                        <li className="font-pixel text-xs text-pixel-black/60">
-                          ...还有 {sensitiveFiles.length - 5} 个文件
-                        </li>
-                      )}
-                    </ul>
-                  </div>
-                </div>
+                <p className="font-pixel text-sm font-bold text-pixel-black">检测到可能包含敏感信息的文件</p>
+                <p className="mt-1 font-pixel text-xs text-pixel-black/70">
+                  上架时会只处理市场副本：敏感路径会跳过，疑似密钥内容会替换为脱敏占位，不会删除你的本地 Agent 文件。
+                </p>
+                <ul className="mt-2 space-y-1">
+                  {sensitiveFiles.slice(0, 5).map((file) => (
+                    <li key={`${file.path}-${file.type}`} className="font-mono text-xs text-pixel-black/80">
+                      - {file.path} ({file.type})
+                    </li>
+                  ))}
+                  {sensitiveFiles.length > 5 && (
+                    <li className="font-pixel text-xs text-pixel-black/60">
+                      ...还有 {sensitiveFiles.length - 5} 个文件
+                    </li>
+                  )}
+                </ul>
               </motion.div>
+            )}
+
+            {publishToMarket && uploadMode === 'zip' && !isScanning && (
+              <div className="mt-4 border-4 border-pixel-blue bg-pixel-blue/10 p-3">
+                <p className="font-pixel text-xs text-pixel-black/70">
+                  zip 包会在后端解压后继续做安全处理；市场副本会自动跳过或脱敏高风险内容。
+                </p>
+              </div>
             )}
           </div>
         )}
 
-        <div className="space-y-4">
-          <div>
-            <label className="font-pixel block mb-2">Agent 名称</label>
-            <PixelInput
-              value={lobsterName}
-              onChange={setLobsterName}
-              placeholder="给你的 Agent 起个名字..."
-              className="w-full"
-              disabled={isUploading}
-            />
-          </div>
-
+        {isFileUploadMode && (
           <PixelButton
-            onClick={handleUpload}
-            disabled={
-              !lobsterName.trim() ||
-              !hasSelection ||
-              !effectiveAgentType ||
-              isUploading ||
-              isDetecting ||
-              isScanning
-            }
+            onClick={() => setSetupPanelOpen(true)}
+            disabled={!hasSelection || isUploading}
             variant="primary"
             size="lg"
             className="w-full"
           >
-            {isUploading
-              ? `上传中... ${uploadProgress}%`
-              : isScanning
-              ? '扫描中...'
-              : publishToMarket
-              ? '🚀 上传并发布到市场'
-              : '📤 开始上传'}
+            {isUploading ? `上传中... ${uploadProgress}%` : '打开 Agent 形象设置'}
           </PixelButton>
-        </div>
+        )}
       </div>
 
       {isUploading && (
-        <div className="mt-4 h-4 bg-pixel-black border-2 border-pixel-black">
+        <div className="mt-4 h-4 border-2 border-pixel-black bg-pixel-black">
           <motion.div className="h-full bg-pixel-green" animate={{ width: `${uploadProgress}%` }} />
         </div>
+      )}
+
+      {isFileUploadMode && (
+        <UploadAgentSetupDialog
+          key={`${fileUploadMode}-${folderName}-${selectedFile?.name || ''}`}
+          open={setupPanelOpen && hasSelection}
+          uploadMode={fileUploadMode}
+          selectedLabel={uploadMode === 'folder' ? folderName : selectedFile?.name || ''}
+          agentName={lobsterName}
+          onAgentNameChange={setLobsterName}
+          detection={detection}
+          selectedAgentType={selectedAgentType}
+          onSelectedAgentTypeChange={setSelectedAgentType}
+          effectiveAgentType={effectiveAgentType}
+          forceManualType={forceManualType}
+          onForceManualTypeChange={setForceManualType}
+          showTypePicker={showTypePicker}
+          isDetecting={isDetecting}
+          publishToMarket={publishToMarket}
+          onPublishToMarketChange={(value) => void handlePublishToggle(value)}
+          isScanning={isScanning}
+          sensitiveFiles={sensitiveFiles}
+          showSensitiveWarning={showSensitiveWarning}
+          hasBlockingMarketRisks={hasMarketSanitizationNotice}
+          isUploading={isUploading}
+          uploadProgress={uploadProgress}
+          error={error}
+          onClose={() => setSetupPanelOpen(false)}
+          onSubmit={(payload) => void handleUpload(payload)}
+        />
       )}
     </motion.div>
   );

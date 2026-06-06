@@ -46,7 +46,7 @@ else
 fi
 
 # ==================== Codex ====================
-echo "[6/6] Installing Codex..."
+echo "[6/7] Installing Codex..."
 # Codex is installed via npx, no global install needed
 if command -v npx &> /dev/null; then
     echo "npx available: $(npx --version)"
@@ -56,6 +56,15 @@ else
     sudo apt-get install -y nodejs
 fi
 echo "Codex can be used via: npx @openai/codex"
+
+# ==================== Pi Agent ====================
+echo "[7/7] Installing Pi Agent..."
+if ! command -v pi &> /dev/null; then
+    npm install -g @earendil-works/pi-coding-agent
+    echo "Pi Agent installed: $(pi --version)"
+else
+    echo "Pi Agent already installed: $(pi --version)"
+fi
 
 # ==================== OpenCode ====================
 echo "[Extra] Installing OpenCode..."
@@ -77,6 +86,7 @@ echo "Installed tools:"
 command -v claude &> /dev/null && echo "  - Claude Code: $(claude --version)"
 command -v hermes &> /dev/null && echo "  - Hermes: $(hermes --version)"
 command -v openclaw &> /dev/null && echo "  - OpenClaw: $(openclaw --version)"
+command -v pi &> /dev/null && echo "  - Pi Agent: $(pi --version)"
 command -v opencode &> /dev/null && echo "  - OpenCode: $(opencode --version)"
 command -v npx &> /dev/null && echo "  - npx (for Codex): $(npx --version)"
 

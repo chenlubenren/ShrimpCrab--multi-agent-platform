@@ -1,137 +1,252 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useStore } from '@/store/useStore';
-import { Architecture, ArchitectureAgent } from '@/types';
+import type {
+  Architecture,
+  ArchitectureAgent,
+  Project,
+  WorkflowArtifact,
+  WorkflowDsl,
+  WorkflowExecution,
+  WorkflowExecutionStatus,
+  WorkflowNodeRunState,
+} from '@/types';
 import { PixelButton } from '@/components/ui/PixelButton';
 import { PixelInput } from '@/components/ui/PixelInput';
 import { NodeFlowPreview } from '@/components/architecture/NodeFlowPreview';
 import { ArchitectureInfo } from '@/components/architecture/ArchitectureInfo';
 import { BackButton } from '@/components/ui/BackButton';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
+import { MessageRenderer } from '@/components/chat/MessageRenderer';
+import { buildWorkflowDslFromCanvas } from '@/lib/workflowDsl';
+import { fetchWorkflowExecution, startWorkflowExecution } from '@/lib/api';
+
+type ChatRole = 'user' | 'system' | 'lobster' | 'error';
+type ChatMessage = { role: ChatRole; content: string; agentName?: string };
+
+const TERMINAL_EXECUTION_STATUSES: WorkflowExecutionStatus[] = ['succeeded', 'failed', 'cancelled'];
 
 export default function ArchitectureDetailPage() {
   const params = useParams();
   const router = useRouter();
   const archId = params.id as string;
-  const { architectures, updateAgentStatus, setActiveAgent, setCurrentTask } = useStore();
-  
-  const architecture = architectures.find((a: Architecture) => a.id === archId);
-  
+  const { architectures, projects, fetchProjects, updateAgentStatus, setActiveAgent, setCurrentTask } = useStore();
+
+  const architecture = architectures.find((item: Architecture) => item.id === archId);
+  const runnableDsl = useMemo(() => {
+    if (!architecture) return null;
+    return resolveArchitectureDsl(architecture);
+  }, [architecture]);
+  const projectOptions = useMemo(() => {
+    if (!architecture) return projects;
+    const boundProjects = projects.filter((project) => project.teamIds.includes(architecture.id));
+    const otherProjects = projects.filter((project) => !project.teamIds.includes(architecture.id));
+    return [...boundProjects, ...otherProjects];
+  }, [architecture, projects]);
+
   const [inputValue, setInputValue] = useState('');
-  const [chatMessages, setChatMessages] = useState<Array<{role: 'user' | 'system' | 'lobster' | 'error'; content: string; agentName?: string}>>([]);
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [isInitialized, setIsInitialized] = useState(false);
   const [graphCollapsed, setGraphCollapsed] = useState(false);
+  const [progressCollapsed, setProgressCollapsed] = useState(false);
+  const [selectedProjectId, setSelectedProjectId] = useState('');
+  const [execution, setExecution] = useState<WorkflowExecution | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const archRef = useRef(architecture);
+  const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const completedExecutionIdsRef = useRef<Set<string>>(new Set());
+  const selectedProject = projectOptions.find((project) => project.id === selectedProjectId) ?? null;
 
-  // Initialize once when architecture loads
   useEffect(() => {
-    const arch = architectures.find((a: Architecture) => a.id === archId);
-    if (arch && !isInitialized) {
+    archRef.current = architecture;
+  }, [architecture]);
+
+  useEffect(() => {
+    void fetchProjects();
+  }, [fetchProjects]);
+
+  useEffect(() => {
+    if (projectOptions.length === 0) {
+      if (selectedProjectId) setSelectedProjectId('');
+      return;
+    }
+    if (!selectedProjectId || !projectOptions.some((project) => project.id === selectedProjectId)) {
+      setSelectedProjectId(projectOptions[0].id);
+    }
+  }, [projectOptions, selectedProjectId]);
+
+  useEffect(() => {
+    if (architecture && !isInitialized) {
       setChatMessages([
         {
           role: 'system',
-          content: `欢迎来到 ${arch.name}！在下方输入任务指令，将由项目经理（后端代理）接收并协调处理。`,
+          content: `欢迎来到 ${architecture.name}。输入任务后，后端会读取当前 Workflow DSL，按节点连接组织多个 Agent 协同工作。`,
         },
       ]);
-      arch.agents.forEach((agent: ArchitectureAgent) => {
+      architecture.agents.forEach((agent: ArchitectureAgent) => {
         updateAgentStatus(archId, agent.id, 'standby');
       });
       setIsInitialized(true);
-      archRef.current = arch;
     }
-  }, [archId, isInitialized]);
+  }, [architecture, archId, isInitialized, updateAgentStatus]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [chatMessages]);
 
-  // Execute task with research-bot-manager via local server proxy
-  const executeTaskWithOpenClaw = async (task: string) => {
+  useEffect(() => {
+    return () => {
+      if (pollTimerRef.current) {
+        clearTimeout(pollTimerRef.current);
+      }
+    };
+  }, []);
+
+  const syncExecutionToUi = useCallback((nextExecution: WorkflowExecution) => {
+    setExecution(nextExecution);
+
+    const currentArch = archRef.current;
+    const states = Object.values(nextExecution.nodeStates);
+    const runningStates = states.filter((state) => state.status === 'running');
+    const activeState = runningStates[0] ?? states.find((state) => state.status === 'ready');
+
+    if (currentArch) {
+      currentArch.agents.forEach((agent) => {
+        const state = nextExecution.nodeStates[agent.nodeId || agent.id];
+        if (!state) return;
+        const nextStatus =
+          state.status === 'running'
+            ? 'executing'
+            : state.status === 'ready'
+              ? 'active'
+              : 'standby';
+        updateAgentStatus(currentArch.id, agent.id, nextStatus);
+      });
+    }
+
+    setActiveAgent(activeState?.nodeId ?? null);
+    setCurrentTask(runningStates.map((state) => `${state.label}: ${state.task || '处理中'}`).join('\n') || null);
+
+    if (
+      TERMINAL_EXECUTION_STATUSES.includes(nextExecution.status) &&
+      !completedExecutionIdsRef.current.has(nextExecution.id)
+    ) {
+      completedExecutionIdsRef.current.add(nextExecution.id);
+      setIsProcessing(false);
+      setActiveAgent(null);
+      setCurrentTask(null);
+
+      setChatMessages((prev) => [
+        ...prev,
+        nextExecution.status === 'succeeded'
+          ? {
+              role: 'lobster',
+              agentName: 'Workflow Executor',
+              content: nextExecution.finalOutput || 'Workflow 执行完成，但没有返回最终输出。',
+            }
+          : {
+              role: 'error',
+              agentName: 'Workflow Executor',
+              content: nextExecution.error || `Workflow 已结束：${nextExecution.status}`,
+            },
+      ]);
+    }
+  }, [setActiveAgent, setCurrentTask, updateAgentStatus]);
+
+  const pollExecution = useCallback((executionId: string) => {
+    const tick = async () => {
+      try {
+        const latest = await fetchWorkflowExecution(executionId);
+        syncExecutionToUi(latest);
+        if (!TERMINAL_EXECUTION_STATUSES.includes(latest.status)) {
+          pollTimerRef.current = setTimeout(tick, 1200);
+        }
+      } catch (error) {
+        setIsProcessing(false);
+        setChatMessages((prev) => [
+          ...prev,
+          {
+            role: 'error',
+            agentName: 'Workflow Executor',
+            content: error instanceof Error ? error.message : '获取执行进度失败',
+          },
+        ]);
+      }
+    };
+
+    if (pollTimerRef.current) {
+      clearTimeout(pollTimerRef.current);
+    }
+    void tick();
+  }, [syncExecutionToUi]);
+
+  const executeTaskWithWorkflow = async (task: string) => {
     const currentArch = archRef.current;
     if (!currentArch) return;
 
-    const managerAgent = currentArch.agents.find((agent: ArchitectureAgent) => agent.isManager) ?? currentArch.agents[0];
-    if (!managerAgent) return;
-
-    const conversationHistory = chatMessages
-      .filter(msg => msg.role === 'user' || msg.role === 'lobster')
-      .map(msg => ({
-        role: msg.role === 'user' ? 'user' : 'assistant',
-        content: msg.content,
-      }));
+    const workflowDsl = currentArch.workflowDsl ?? runnableDsl;
+    if (!workflowDsl) {
+      setChatMessages((prev) => [
+        ...prev,
+        { role: 'user', content: task },
+        {
+          role: 'error',
+          agentName: 'Workflow Executor',
+          content: '当前团队没有可执行的 Workflow DSL。请先在创建页用画布或自然语言生成团队。',
+        },
+      ]);
+      return;
+    }
 
     setIsProcessing(true);
+    setProgressCollapsed(false);
     setCurrentTask(task);
-    setActiveAgent(managerAgent.id);
-    updateAgentStatus(archId, managerAgent.id, 'active');
-
-    setChatMessages(prev => [...prev, { role: 'user', content: task }]);
+    setChatMessages((prev) => [
+      ...prev,
+      { role: 'user', content: task },
+      {
+        role: 'system',
+        agentName: 'Workflow Executor',
+        content: '任务已提交到后端执行器。执行器会按 DSL 的 DAG/状态机规则调度 Agent，并持续回传节点进度。',
+      },
+    ]);
     setInputValue('');
 
-    setChatMessages(prev => [...prev, {
-      role: 'system',
-      content: `[${managerAgent.name}] 已接收任务，正在通过后端代理连接 OpenClaw...`,
-      agentName: managerAgent.name,
-    }]);
-
     try {
-      updateAgentStatus(archId, managerAgent.id, 'executing');
-
-      const response = await fetch('/api/lobsters/research-bot-manager/chat', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          message: task,
-          messages: conversationHistory,
-        }),
+      const started = await startWorkflowExecution({
+        architectureId: currentArch.id,
+        projectId: selectedProjectId || undefined,
+        workflowDsl,
+        task,
       });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data?.error || '调用 research-bot-manager 失败');
-      }
-
-      const reply = typeof data?.reply === 'string' ? data.reply.trim() : '';
-      if (!reply) {
-        throw new Error('research-bot-manager 返回了空响应');
-      }
-
-      setChatMessages(prev => [...prev, {
-        role: 'lobster',
-        content: reply,
-        agentName: managerAgent.name,
-      }]);
+      syncExecutionToUi(started);
+      pollExecution(started.id);
     } catch (error) {
-      setChatMessages(prev => [...prev, {
-        role: 'error',
-        content: `[${managerAgent.name}] ❌ ${error instanceof Error ? error.message : '未知错误'}`,
-        agentName: managerAgent.name,
-      }]);
-    } finally {
-      updateAgentStatus(archId, managerAgent.id, 'standby');
+      setIsProcessing(false);
       setActiveAgent(null);
       setCurrentTask(null);
-      setIsProcessing(false);
+      setChatMessages((prev) => [
+        ...prev,
+        {
+          role: 'error',
+          agentName: 'Workflow Executor',
+          content: error instanceof Error ? error.message : '启动 Workflow 执行失败',
+        },
+      ]);
     }
   };
 
   const handleSend = () => {
     if (!inputValue.trim() || isProcessing) return;
-    executeTaskWithOpenClaw(inputValue.trim());
+    void executeTaskWithWorkflow(inputValue.trim());
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
+  const handleKeyDown = (event: React.KeyboardEvent) => {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
       handleSend();
     }
   };
@@ -139,9 +254,9 @@ export default function ArchitectureDetailPage() {
   if (!architecture) {
     return (
       <div className="text-center py-16">
-        <h2 className="chinese-large text-pixel-black text-2xl">架构未找到</h2>
+        <h2 className="chinese-large text-pixel-black text-2xl">团队未找到</h2>
         <PixelButton onClick={() => router.push('/architectures/mine')} className="mt-6 text-lg">
-          返回架构列表
+          返回团队列表
         </PixelButton>
       </div>
     );
@@ -149,7 +264,6 @@ export default function ArchitectureDetailPage() {
 
   return (
     <div className="max-w-6xl mx-auto">
-      {/* Header */}
       <motion.div
         initial={{ opacity: 0, y: -20 }}
         animate={{ opacity: 1, y: 0 }}
@@ -161,7 +275,6 @@ export default function ArchitectureDetailPage() {
         </h1>
       </motion.div>
 
-      {/* Architecture Info */}
       <motion.div
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
@@ -171,7 +284,14 @@ export default function ArchitectureDetailPage() {
         <ArchitectureInfo architecture={architecture} />
       </motion.div>
 
-      {/* Node Flow Preview — Collapsible */}
+      <ProjectRunPanel
+        projects={projectOptions}
+        selectedProjectId={selectedProjectId}
+        selectedProject={selectedProject}
+        disabled={isProcessing}
+        onChange={setSelectedProjectId}
+      />
+
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
@@ -182,7 +302,7 @@ export default function ArchitectureDetailPage() {
           onClick={() => setGraphCollapsed(!graphCollapsed)}
           className="w-full flex items-center justify-between px-2 py-1 mb-2 cursor-pointer"
         >
-          <h2 className="chinese-large text-xl text-pixel-black">架构节点图</h2>
+          <h2 className="chinese-large text-xl text-pixel-black">团队节点图</h2>
           <div className="flex items-center gap-3">
             <span className="font-pixel text-base text-pixel-black/60">
               {graphCollapsed ? '点击展开' : '点击收起'}
@@ -192,7 +312,7 @@ export default function ArchitectureDetailPage() {
               transition={{ duration: 0.2 }}
               className="text-pixel-black text-2xl leading-none"
             >
-              ▼
+              ▲
             </motion.div>
           </div>
         </button>
@@ -207,7 +327,7 @@ export default function ArchitectureDetailPage() {
               transition={{ duration: 0.3, ease: 'easeInOut' }}
               className="overflow-hidden"
             >
-              <NodeFlowPreview architecture={architecture} />
+              <NodeFlowPreview architecture={architecture} execution={execution} />
             </motion.div>
           )}
         </AnimatePresence>
@@ -217,12 +337,19 @@ export default function ArchitectureDetailPage() {
             className="h-12 bg-pixel-gray/20 border-4 border-pixel-black flex items-center justify-center font-pixel text-pixel-black/40 text-sm"
             style={{ boxShadow: '4px 4px 0px 0px #101010' }}
           >
-            ▶ {architecture.name} — {architecture.agents.length} 名成员 · {architecture.edges?.length ?? 0} 条连接
+            {architecture.name} - {architecture.agents.length} 名成员 - {architecture.edges?.length ?? 0} 条连接
           </div>
         )}
       </motion.div>
 
-      {/* Chat Dialog */}
+      {execution && (
+        <WorkflowProgressPanel
+          execution={execution}
+          collapsed={progressCollapsed}
+          onToggle={() => setProgressCollapsed((value) => !value)}
+        />
+      )}
+
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
@@ -230,9 +357,8 @@ export default function ArchitectureDetailPage() {
         className="bg-pixel-white border-4 border-pixel-black"
         style={{ boxShadow: '8px 8px 0px 0px #101010' }}
       >
-        {/* Chat Header */}
         <div className="bg-pixel-blue text-pixel-white font-pixel text-xl p-4 border-b-4 border-pixel-black flex items-center gap-2">
-          <span className="animate-pulse">{">"}</span>
+          <span className="animate-pulse">{'>'}</span>
           <span>指令控制台</span>
           {isProcessing && (
             <span className="ml-auto bg-pixel-yellow text-pixel-black px-3 py-1 text-sm animate-pulse">
@@ -241,12 +367,11 @@ export default function ArchitectureDetailPage() {
           )}
         </div>
 
-        {/* Messages */}
         <div className="p-6 min-h-[350px] max-h-[450px] overflow-y-auto bg-pixel-white">
           <AnimatePresence>
             {chatMessages.map((msg, index) => (
               <motion.div
-                key={index}
+                key={`${msg.role}-${index}`}
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: 0.05 }}
@@ -254,18 +379,15 @@ export default function ArchitectureDetailPage() {
               >
                 <div
                   className={`
-                    inline-block
-                    max-w-[85%]
-                    px-5 py-3
-                    font-pixel text-base
-                    text-left
-                    ${msg.role === 'user' 
-                      ? 'bg-pixel-blue text-pixel-white border-4 border-pixel-black' 
+                    inline-block max-w-[85%] px-5 py-3 font-pixel text-base text-left
+                    ${msg.role === 'user'
+                      ? 'bg-pixel-blue text-pixel-white border-4 border-pixel-black'
                       : msg.role === 'lobster'
-                      ? 'bg-pixel-green text-pixel-white border-4 border-pixel-black' 
-                      : msg.role === 'error'
-                      ? 'bg-pixel-red text-pixel-white border-4 border-pixel-black'
-                      : 'bg-pixel-gray/50 text-pixel-black border-4 border-pixel-black'}
+                        ? 'bg-pixel-green text-pixel-white border-4 border-pixel-black'
+                        : msg.role === 'error'
+                          ? 'bg-pixel-red text-pixel-white border-4 border-pixel-black'
+                          : 'bg-pixel-gray/50 text-pixel-black border-4 border-pixel-black'
+                    }
                   `}
                   style={{ boxShadow: '3px 3px 0px 0px #101010' }}
                 >
@@ -274,15 +396,10 @@ export default function ArchitectureDetailPage() {
                       {msg.agentName}
                     </div>
                   )}
-                  {msg.role === 'lobster' ? (
-                    <div className="font-pixel text-sm [&_p]:mb-2 [&_pre]:bg-pixel-black/20 [&_pre]:p-3 [&_pre]:rounded [&_code]:bg-pixel-black/10 [&_code]:px-1 [&_code]:rounded [&_h1]:text-lg [&_h1]:font-bold [&_h2]:text-base [&_h2]:font-bold [&_h3]:text-sm [&_h3]:font-bold [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5 [&_li]:mb-1 [&_strong]:font-bold [&_em]:italic [&_a]:underline [&_a]:text-pixel-white/80">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                        {msg.content}
-                      </ReactMarkdown>
-                    </div>
-                  ) : (
-                    <div className="whitespace-pre-wrap">{msg.content}</div>
-                  )}
+                  <MessageRenderer
+                    content={msg.content}
+                    tone={msg.role === 'system' ? 'default' : 'inverse'}
+                  />
                 </div>
               </motion.div>
             ))}
@@ -290,7 +407,6 @@ export default function ArchitectureDetailPage() {
           <div ref={messagesEndRef} />
         </div>
 
-        {/* Input */}
         <div className="border-t-4 border-pixel-black p-4 bg-pixel-gray/20">
           <div className="flex gap-3">
             <PixelInput
@@ -311,10 +427,314 @@ export default function ArchitectureDetailPage() {
             </PixelButton>
           </div>
           <p className="font-pixel text-sm text-pixel-black/50 mt-3 text-center">
-            任务将通过本地接口转发，由团队架构协调执行
+            任务会提交到后端 Workflow Executor，由 DSL 决定 Agent 顺序、并行、条件分支和进度追踪。
           </p>
         </div>
       </motion.div>
     </div>
   );
+}
+
+function ProjectRunPanel({
+  projects,
+  selectedProjectId,
+  selectedProject,
+  disabled,
+  onChange,
+}: {
+  projects: Project[];
+  selectedProjectId: string;
+  selectedProject: Project | null;
+  disabled: boolean;
+  onChange: (projectId: string) => void;
+}) {
+  return (
+    <div
+      className="mb-6 border-4 border-pixel-black bg-pixel-white p-4"
+      style={{ boxShadow: '6px 6px 0px 0px #101010' }}
+    >
+      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+        <div className="min-w-0 flex-1">
+          <div className="font-pixel text-sm text-pixel-black">运行项目</div>
+          <p className="mt-1 truncate font-pixel text-xs text-pixel-black/60">
+            {selectedProject
+              ? `共享工作区：${selectedProject.workspacePath}`
+              : '未选择项目时，会使用本次团队运行的临时共享工作区。'}
+          </p>
+        </div>
+        <div className="flex flex-col gap-2 md:flex-row md:items-center">
+          <select
+            value={selectedProjectId}
+            onChange={(event) => onChange(event.target.value)}
+            disabled={disabled}
+            className="min-h-[40px] min-w-[240px] border-3 border-pixel-black bg-pixel-white px-3 font-pixel text-sm text-pixel-black disabled:opacity-50"
+          >
+            <option value="">临时工作区</option>
+            {projects.map((project) => (
+              <option key={project.id} value={project.id}>
+                {project.name}{project.teamIds.length > 0 ? ` · ${project.teamIds.length} 团队` : ''}
+              </option>
+            ))}
+          </select>
+          <a
+            href="/projects"
+            className="inline-flex min-h-[40px] items-center justify-center border-3 border-pixel-black bg-pixel-yellow px-3 font-pixel text-sm text-pixel-black"
+            style={{ boxShadow: '3px 3px 0px 0px #101010' }}
+          >
+            管理项目
+          </a>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function WorkflowProgressPanel({
+  execution,
+  collapsed,
+  onToggle,
+}: {
+  execution: WorkflowExecution;
+  collapsed: boolean;
+  onToggle: () => void;
+}) {
+  const nodeStates = Object.values(execution.nodeStates);
+  const running = nodeStates.filter((state) => state.status === 'running');
+  const completedCount = nodeStates.filter((state) =>
+    state.status === 'succeeded' || state.status === 'skipped'
+  ).length;
+  const recentEvents = execution.events.slice(-8).reverse();
+  const artifacts = execution.artifacts || [];
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 12 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="bg-pixel-white border-4 border-pixel-black p-5 mb-6"
+      style={{ boxShadow: '6px 6px 0px 0px #101010' }}
+    >
+      <button
+        type="button"
+        onClick={onToggle}
+        className={`w-full flex items-center justify-between gap-3 text-left ${collapsed ? '' : 'mb-4'}`}
+      >
+        <div>
+          <h2 className="font-pixel text-lg text-pixel-black">任务进展追踪</h2>
+          <p className="font-pixel text-xs text-pixel-black/50 mt-1">
+            {completedCount}/{nodeStates.length} 节点完成 · 执行 ID: {execution.id}
+          </p>
+        </div>
+        <div className="flex items-center gap-3">
+          <div className={`px-3 py-1 border-2 border-pixel-black font-pixel text-xs ${executionStatusClass(execution.status)}`}>
+            {executionStatusLabel(execution.status)}
+          </div>
+          <motion.span
+            animate={{ rotate: collapsed ? 0 : 180 }}
+            transition={{ duration: 0.2 }}
+            className="font-pixel text-2xl leading-none text-pixel-black"
+          >
+            ▼
+          </motion.span>
+        </div>
+      </button>
+
+      {collapsed && (
+        <div className="mt-3 bg-pixel-gray/20 border-3 border-pixel-black p-3 font-pixel text-sm text-pixel-black">
+          {running.length > 0
+            ? running.map((state) => `${state.agentName || state.label}: ${shortText(state.task || '处理中', 96)}`).join('\n')
+            : `当前状态：${executionStatusLabel(execution.status)}`}
+        </div>
+      )}
+
+      <AnimatePresence initial={false}>
+        {!collapsed && (
+          <motion.div
+            key="progress-body"
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.25, ease: 'easeInOut' }}
+            className="overflow-hidden"
+          >
+            <div className="mb-4 bg-pixel-gray/20 border-3 border-pixel-black p-3">
+              <div className="font-pixel text-xs text-pixel-black/60 mb-1">当前正在工作</div>
+              <div className="font-pixel text-sm text-pixel-black whitespace-pre-wrap">
+                {running.length > 0
+                  ? running.map((state) => `${state.agentName || state.label}: ${shortText(state.task || '处理中', 120)}`).join('\n')
+                  : '暂无运行中的节点'}
+              </div>
+            </div>
+
+            <div className="mb-4 grid gap-3 md:grid-cols-2">
+              <div className="border-3 border-pixel-black bg-pixel-white p-3">
+                <div className="font-pixel text-xs text-pixel-black/50">项目/共享工作区</div>
+                <div className="mt-1 font-pixel text-sm text-pixel-black">
+                  {execution.projectName || '临时团队运行'}
+                </div>
+                <div className="mt-2 break-all font-pixel text-xs text-pixel-black/60">
+                  {execution.sharedWorkspacePath}
+                </div>
+              </div>
+              <div className="border-3 border-pixel-black bg-pixel-white p-3">
+                <div className="font-pixel text-xs text-pixel-black/50">产物目录</div>
+                <div className="mt-1 break-all font-pixel text-xs text-pixel-black/70">
+                  {execution.artifactsPath}
+                </div>
+                <div className="mt-2 font-pixel text-xs text-pixel-black/50">
+                  已记录 {artifacts.length} 个节点输出/工作区文件
+                </div>
+              </div>
+            </div>
+
+            <div className="grid md:grid-cols-2 gap-3 mb-4">
+              {nodeStates.map((state) => (
+                <NodeProgressItem key={state.nodeId} state={state} />
+              ))}
+            </div>
+
+            {artifacts.length > 0 && (
+              <details className="mb-4">
+                <summary className="cursor-pointer font-pixel text-sm text-pixel-blue">查看交接文件</summary>
+                <ArtifactList artifacts={artifacts} />
+              </details>
+            )}
+
+            <details>
+              <summary className="cursor-pointer font-pixel text-sm text-pixel-blue">查看最近事件</summary>
+              <div className="mt-3 space-y-2">
+                {recentEvents.map((event) => (
+                  <div key={event.id} className="border-2 border-pixel-black bg-pixel-gray/20 p-2">
+                    <div className="font-pixel text-xs text-pixel-black/50">
+                      {new Date(event.timestamp).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                    </div>
+                    <div className="font-pixel text-xs text-pixel-black mt-1">{event.message}</div>
+                  </div>
+                ))}
+              </div>
+            </details>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </motion.div>
+  );
+}
+
+function NodeProgressItem({ state }: { state: WorkflowNodeRunState }) {
+  const artifacts = state.artifacts || [];
+  return (
+    <div className="border-3 border-pixel-black bg-pixel-gray/10 p-3">
+      <div className="flex items-start justify-between gap-2 mb-2">
+        <div>
+          <div className="font-pixel text-sm text-pixel-black">{state.agentName || state.label}</div>
+          <div className="font-pixel text-xs text-pixel-black/50 mt-1">
+            {state.type}{state.kind ? ` / ${state.kind}` : ''}{state.role ? ` / ${state.role}` : ''} / run {state.runCount}
+          </div>
+        </div>
+        <span className={`px-2 py-1 border-2 border-pixel-black font-pixel text-[10px] ${nodeStatusClass(state.status)}`}>
+          {nodeStatusLabel(state.status)}
+        </span>
+      </div>
+      {state.task && (
+        <div className="font-pixel text-xs text-pixel-black/70 whitespace-pre-wrap">
+          {shortText(state.task, 180)}
+        </div>
+      )}
+      {state.error && (
+        <div className="font-pixel text-xs text-pixel-red mt-2 whitespace-pre-wrap">
+          {state.error}
+        </div>
+      )}
+      {state.output && state.status !== 'running' && (
+        <div className="font-pixel text-xs text-pixel-black/60 mt-2 whitespace-pre-wrap">
+          {shortText(state.output, 180)}
+        </div>
+      )}
+      {artifacts.length > 0 && (
+        <div className="mt-2 border-t-2 border-pixel-black/20 pt-2">
+          <div className="font-pixel text-[10px] text-pixel-black/50">产物 {artifacts.length}</div>
+          <div className="mt-1 space-y-1">
+            {artifacts.slice(0, 3).map((artifact) => (
+              <div key={artifact.id} className="truncate font-pixel text-[10px] text-pixel-black/60">
+                {artifact.kind === 'workspace-file' ? '文件' : '输出'} · {artifact.relativePath}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ArtifactList({ artifacts }: { artifacts: WorkflowArtifact[] }) {
+  return (
+    <div className="mt-3 grid gap-2 md:grid-cols-2">
+      {artifacts.slice(-12).reverse().map((artifact) => (
+        <div key={artifact.id} className="border-2 border-pixel-black bg-pixel-gray/10 p-2">
+          <div className="flex items-center justify-between gap-2">
+            <div className="truncate font-pixel text-xs text-pixel-black">{artifact.label}</div>
+            <span className="shrink-0 border-2 border-pixel-black bg-pixel-white px-1.5 py-0.5 font-pixel text-[10px] text-pixel-black">
+              {artifact.kind === 'workspace-file' ? 'FILE' : 'OUT'}
+            </span>
+          </div>
+          <div className="mt-1 break-all font-pixel text-[10px] text-pixel-black/60">
+            {artifact.path}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function resolveArchitectureDsl(architecture: Architecture): WorkflowDsl | null {
+  if (architecture.workflowDsl) return architecture.workflowDsl;
+  if (!architecture.nodes || architecture.nodes.length === 0) return null;
+  return buildWorkflowDslFromCanvas({
+    name: architecture.name,
+    description: architecture.description,
+    nodes: architecture.nodes,
+    edges: architecture.edges ?? [],
+    source: 'canvas',
+  }).dsl;
+}
+
+function executionStatusLabel(status: WorkflowExecutionStatus): string {
+  const labels: Record<WorkflowExecutionStatus, string> = {
+    queued: '排队中',
+    running: '执行中',
+    succeeded: '已完成',
+    failed: '失败',
+    cancelled: '已取消',
+  };
+  return labels[status];
+}
+
+function executionStatusClass(status: WorkflowExecutionStatus): string {
+  if (status === 'succeeded') return 'bg-pixel-green text-pixel-white';
+  if (status === 'failed' || status === 'cancelled') return 'bg-pixel-red text-pixel-white';
+  return 'bg-pixel-yellow text-pixel-black';
+}
+
+function nodeStatusLabel(status: WorkflowNodeRunState['status']): string {
+  const labels: Record<WorkflowNodeRunState['status'], string> = {
+    pending: '等待',
+    ready: '就绪',
+    running: '工作中',
+    succeeded: '完成',
+    failed: '失败',
+    skipped: '跳过',
+  };
+  return labels[status];
+}
+
+function nodeStatusClass(status: WorkflowNodeRunState['status']): string {
+  if (status === 'running') return 'bg-pixel-blue text-pixel-white';
+  if (status === 'ready') return 'bg-pixel-yellow text-pixel-black';
+  if (status === 'succeeded') return 'bg-pixel-green text-pixel-white';
+  if (status === 'failed') return 'bg-pixel-red text-pixel-white';
+  return 'bg-pixel-white text-pixel-black';
+}
+
+function shortText(value: string, maxLength: number): string {
+  const normalized = value.replace(/\s+/g, ' ').trim();
+  return normalized.length > maxLength ? `${normalized.slice(0, maxLength)}...` : normalized;
 }

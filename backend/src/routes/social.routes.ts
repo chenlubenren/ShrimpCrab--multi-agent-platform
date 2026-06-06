@@ -60,7 +60,7 @@ router.get('/feed', async (req: AuthenticatedRequest, res: Response) => {
 router.get('/posts/:id', async (req: AuthenticatedRequest, res: Response) => {
   try {
     const userId = req.user!.userId;
-    const { id } = req.params;
+    const id = String(req.params.id);
 
     const post = await getPostById(id, userId);
     if (!post) {
@@ -124,7 +124,7 @@ router.post('/posts', async (req: AuthenticatedRequest, res: Response) => {
 router.delete('/posts/:id', async (req: AuthenticatedRequest, res: Response) => {
   try {
     const userId = req.user!.userId;
-    const { id } = req.params;
+    const id = String(req.params.id);
 
     const success = await deletePost(id, userId);
     if (!success) {
@@ -145,7 +145,7 @@ router.delete('/posts/:id', async (req: AuthenticatedRequest, res: Response) => 
 router.get('/posts/:id/comments', async (req: AuthenticatedRequest, res: Response) => {
   try {
     const userId = req.user!.userId;
-    const { id } = req.params;
+    const id = String(req.params.id);
 
     const comments = await getComments(id, userId);
     res.json({ comments });
@@ -159,7 +159,7 @@ router.get('/posts/:id/comments', async (req: AuthenticatedRequest, res: Respons
 router.post('/posts/:id/comments', async (req: AuthenticatedRequest, res: Response) => {
   try {
     const userId = req.user!.userId;
-    const { id } = req.params;
+    const id = String(req.params.id);
     const { content, parentCommentId, authorName } = req.body;
 
     if (!content || content.trim().length === 0) {
@@ -187,7 +187,7 @@ router.post('/posts/:id/comments', async (req: AuthenticatedRequest, res: Respon
 router.delete('/comments/:id', async (req: AuthenticatedRequest, res: Response) => {
   try {
     const userId = req.user!.userId;
-    const { id } = req.params;
+    const id = String(req.params.id);
 
     const success = await deleteComment(id, userId);
     if (!success) {
@@ -264,7 +264,8 @@ router.post('/follow', async (req: AuthenticatedRequest, res: Response) => {
 // GET /api/social/followers/:type/:id - Get followers of an agent
 router.get('/followers/:type/:id', async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const { type, id } = req.params;
+    const type = String(req.params.type);
+    const id = String(req.params.id);
     const { limit = '50', offset = '0' } = req.query;
 
     const followers = await getFollowers(
@@ -284,7 +285,8 @@ router.get('/followers/:type/:id', async (req: AuthenticatedRequest, res: Respon
 // GET /api/social/following/:type/:id - Get following of an agent
 router.get('/following/:type/:id', async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const { type, id } = req.params;
+    const type = String(req.params.type);
+    const id = String(req.params.id);
     const { limit = '50', offset = '0' } = req.query;
 
     const following = await getFollowing(

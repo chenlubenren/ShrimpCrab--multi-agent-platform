@@ -13,6 +13,7 @@ import { AgentSettingsPanel } from '@/components/chat/AgentSettingsPanel';
 import { CapabilitiesConfig } from '@/components/chat/CapabilitiesConfig';
 import { TokenUsageDisplay } from '@/components/chat/TokenUsageDisplay';
 import { MessageRenderer } from '@/components/chat/MessageRenderer';
+import { getModelDisplayName, normalizeProviderModels } from '@/lib/providerPresets';
 
 interface Agent {
   id: string;
@@ -33,6 +34,15 @@ interface AgentConfig {
   model?: string;
   maxTokens?: number;
   temperature?: number;
+  [key: string]: unknown;
+}
+
+interface AgentProvider {
+  id: string;
+  name: string;
+  type: string;
+  baseUrl?: string | null;
+  models: unknown[];
 }
 
 interface TokenStats {
@@ -40,6 +50,25 @@ interface TokenStats {
   outputTokens: number;
   totalTokens: number;
   costEstimate?: string;
+}
+
+interface ConversationSession {
+  id: string;
+  agentInstanceId: string;
+  title: string;
+  lastMessage: string;
+  messageCount: number;
+  sessionId?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface StoredChatMessage {
+  id: string;
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+  metadata?: string;
+  createdAt: string;
 }
 
 interface ToolCall {
@@ -51,9 +80,99 @@ interface ToolCall {
   result?: string;
 }
 
+interface UploadedChatAsset {
+  filename: string;
+  originalName?: string;
+  mimeType?: string;
+  size?: number;
+  relativePath: string;
+  previewUrl: string;
+}
+
 type TabType = 'chat' | 'monitor' | 'capabilities';
 
 const API_BASE = 'http://localhost:3002';
+
+function MessageActionButton({
+  title,
+  onClick,
+  children,
+}: {
+  title: string;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      title={title}
+      aria-label={title}
+      onClick={onClick}
+      className="flex h-7 w-7 items-center justify-center bg-transparent text-pixel-black/35 transition-colors hover:bg-pixel-black/10 hover:text-pixel-black/75 focus:outline-none focus:text-pixel-black/75"
+    >
+      {children}
+    </button>
+  );
+}
+
+function PlusIcon({ className = 'h-4 w-4' }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" className={className} aria-hidden="true">
+      <path d="M8 3v10M3 8h10" strokeLinecap="square" />
+    </svg>
+  );
+}
+
+function QuoteIcon({ className = 'h-4 w-4' }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" className={className} aria-hidden="true">
+      <path d="M6.5 4.5H4.5L3 7v4.5h4.5V7H5.1l1.4-2.5ZM13 4.5H11L9.5 7v4.5H14V7h-2.4L13 4.5Z" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function HideIcon({ className = 'h-4 w-4' }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" className={className} aria-hidden="true">
+      <path d="M2 8c1.5-2.3 3.5-3.5 6-3.5S12.5 5.7 14 8c-1.5 2.3-3.5 3.5-6 3.5S3.5 10.3 2 8Z" strokeLinecap="round" strokeLinejoin="round" />
+      <circle cx="8" cy="8" r="1.8" />
+      <path d="M3 13 13 3" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function parseModels(raw: unknown): unknown[] {
+  if (Array.isArray(raw)) return raw;
+  if (typeof raw !== 'string') return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function parseMessageMetadata(raw?: string): Record<string, unknown> {
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : {};
+  } catch {
+    return {};
+  }
+}
+
+function mapStoredMessage(message: StoredChatMessage): any {
+  const metadata = parseMessageMetadata(message.metadata);
+  return {
+    id: message.id,
+    role: message.role,
+    content: message.content,
+    timestamp: new Date(message.createdAt),
+    sessionId: typeof metadata.sessionId === 'string' ? metadata.sessionId : null,
+    conversationId: typeof metadata.conversationId === 'string' ? metadata.conversationId : null,
+  };
+}
 
 export default function AgentChatPage() {
   const params = useParams();
@@ -68,7 +187,22 @@ export default function AgentChatPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<TabType>('chat');
   const [showSettings, setShowSettings] = useState(false);
-  const [systemMessagesCollapsed, setSystemMessagesCollapsed] = useState(true);
+  const [activeProvider, setActiveProvider] = useState<AgentProvider | null>(null);
+  const [selectedModel, setSelectedModel] = useState('');
+  const [savingModel, setSavingModel] = useState(false);
+  const [modelError, setModelError] = useState('');
+  const [conversationSessions, setConversationSessions] = useState<ConversationSession[]>([]);
+  const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
+  const [sessionsLoading, setSessionsLoading] = useState(false);
+  const [creatingSession, setCreatingSession] = useState(false);
+  const [sessionError, setSessionError] = useState('');
+  const [renamingSession, setRenamingSession] = useState(false);
+  const [sessionTitleDraft, setSessionTitleDraft] = useState('');
+  const [savingSessionTitle, setSavingSessionTitle] = useState(false);
+  const [deletingConversationId, setDeletingConversationId] = useState<string | null>(null);
+  const [awaitingResponse, setAwaitingResponse] = useState(false);
+  const [isUploadingImage, setIsUploadingImage] = useState(false);
+  const [composerStatus, setComposerStatus] = useState('');
   
   // Agent state tracking
   const [agentState, setAgentState] = useState<'idle' | 'thinking' | 'executing' | 'responding'>('idle');
@@ -87,24 +221,83 @@ export default function AgentChatPage() {
     isSessionActive,
     messages,
     error,
+    currentSessionId,
+    currentConversationId,
     sendMessage,
     startSession,
     stopSession,
     clearMessages,
-    connect,
+    hydrateMessages,
   } = useAgentChat({
     agentId,
     token: token || '',
-    autoConnect: true,
-    autoStartSession: true,
+    conversationId: activeConversationId,
+    autoConnect: Boolean(activeConversationId),
+    autoStartSession: false,
   });
 
-  // Connect to WebSocket
-  useEffect(() => {
-    if (token && agentId) {
-      connect();
+  const createSessionRecord = useCallback(async (title?: string): Promise<ConversationSession> => {
+    if (!agent || !token) {
+      throw new Error('无法创建会话');
     }
-  }, [token, agentId, connect]);
+
+    const nextTitle = title?.trim() || `Session ${conversationSessions.length + 1}`;
+    const res = await fetch(`${API_BASE}/api/conversations`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        agentInstanceId: agent.id,
+        title: nextTitle,
+      }),
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok) {
+      throw new Error(data?.message || '创建会话失败');
+    }
+
+    return data.conversation as ConversationSession;
+  }, [agent, token, conversationSessions.length]);
+
+  const appendToComposer = useCallback((snippet: string) => {
+    const cleanSnippet = snippet.trim();
+    if (!cleanSnippet) return;
+
+    setInputValue((current) => {
+      const trimmed = current.trim();
+      return trimmed ? `${trimmed}\n\n${cleanSnippet}` : cleanSnippet;
+    });
+  }, []);
+
+  const buildQuoteSnippet = useCallback((message: { role: string; content: string }) => {
+    const speaker =
+      message.role === 'user'
+        ? '你'
+        : message.role === 'system'
+          ? '系统'
+          : agent?.name || 'Agent';
+
+    const quoteLines = message.content
+      .trim()
+      .split(/\r?\n/)
+      .map((line) => `> ${line}`)
+      .join('\n');
+
+    return `> 引用 ${speaker}\n${quoteLines}`;
+  }, [agent?.name]);
+
+  const buildImageAttachmentSnippet = useCallback((asset: UploadedChatAsset) => {
+    const label = asset.originalName || asset.filename;
+    return [
+      `### 图片附件`,
+      `- 文件名: ${label}`,
+      `- 工作区路径: \`${asset.relativePath}\``,
+      '',
+      `![${label}](${asset.previewUrl})`,
+    ].join('\n');
+  }, []);
 
   // Fetch agent info
   useEffect(() => {
@@ -127,6 +320,7 @@ export default function AgentChatPage() {
 
         const data = await res.json();
         setAgent(data.agent);
+        setSelectedModel(data.agent?.config?.model || '');
       } catch (e) {
         console.error('Failed to fetch agent:', e);
         setErrorMessage('无法加载 Agent 信息');
@@ -138,17 +332,155 @@ export default function AgentChatPage() {
     fetchAgent();
   }, [agentId, token, router]);
 
+  useEffect(() => {
+    async function fetchSessions() {
+      if (!token || !agent) return;
+      setSessionsLoading(true);
+      setSessionError('');
+      try {
+        const res = await fetch(`${API_BASE}/api/conversations/${agent.id}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!res.ok) throw new Error('无法加载会话列表');
+        const data = await res.json();
+        let sessions: ConversationSession[] = Array.isArray(data.conversations) ? data.conversations : [];
+
+        if (sessions.length === 0) {
+          const createRes = await fetch(`${API_BASE}/api/conversations`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({
+              agentInstanceId: agent.id,
+              title: 'Session 1',
+            }),
+          });
+          if (!createRes.ok) throw new Error('无法创建默认会话');
+          const created = await createRes.json();
+          sessions = [created.conversation];
+        }
+
+        setConversationSessions(sessions);
+        setActiveConversationId((current) =>
+          current && sessions.some((session) => session.id === current)
+            ? current
+            : sessions[0]?.id || null
+        );
+      } catch (e) {
+        console.error('Failed to fetch sessions:', e);
+        setSessionError(e instanceof Error ? e.message : '无法加载会话');
+      } finally {
+        setSessionsLoading(false);
+      }
+    }
+
+    fetchSessions();
+  }, [agent?.id, token]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function fetchConversationMessages() {
+      if (!token || !activeConversationId) return;
+      try {
+        const res = await fetch(`${API_BASE}/api/conversations/${activeConversationId}/messages`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!res.ok) throw new Error('无法加载会话消息');
+        const data = await res.json();
+        if (cancelled) return;
+        const storedMessages: StoredChatMessage[] = Array.isArray(data.messages) ? data.messages : [];
+        hydrateMessages(storedMessages.map(mapStoredMessage));
+      } catch (e) {
+        if (cancelled) return;
+        console.error('Failed to fetch conversation messages:', e);
+        setSessionError(e instanceof Error ? e.message : '无法加载会话消息');
+      }
+    }
+
+    fetchConversationMessages();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeConversationId, hydrateMessages, token]);
+
+  useEffect(() => {
+    if (!activeConversationId || !currentSessionId) return;
+    setConversationSessions((current) =>
+      current.map((session) =>
+        session.id === activeConversationId
+          ? { ...session, sessionId: currentSessionId }
+          : session
+      )
+    );
+  }, [activeConversationId, currentSessionId]);
+
+  useEffect(() => {
+    if (!activeConversationId) return;
+    const lastMessage = messages[messages.length - 1];
+    setConversationSessions((current) =>
+      current.map((session) =>
+        session.id === activeConversationId
+          ? {
+              ...session,
+              messageCount: messages.length,
+              lastMessage: lastMessage?.content?.slice(0, 200) || session.lastMessage,
+            }
+          : session
+      )
+    );
+  }, [activeConversationId, messages]);
+
+  useEffect(() => {
+    async function fetchActiveProvider() {
+      if (!token || !agent?.providerId) {
+        setActiveProvider(null);
+        return;
+      }
+
+      setActiveProvider(null);
+      try {
+        const res = await fetch(`${API_BASE}/api/providers/${agent.providerId}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!res.ok) {
+          setActiveProvider(null);
+          return;
+        }
+        const data = await res.json();
+        setActiveProvider({
+          ...data.provider,
+          models: parseModels(data.provider?.models),
+        });
+      } catch (e) {
+        console.error('Failed to fetch active provider:', e);
+        setActiveProvider(null);
+      }
+    }
+
+    fetchActiveProvider();
+  }, [agent?.providerId, token]);
+
   // Auto-scroll to bottom
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
+  useEffect(() => {
+    const lastMessage = messages[messages.length - 1];
+    if (lastMessage && lastMessage.role !== 'user') {
+      setAwaitingResponse(false);
+    }
+  }, [messages]);
+
   // Auto-start session when connected
   useEffect(() => {
-    if (isConnected && !isSessionActive && agent) {
+    if (isConnected && !isSessionActive && agent && activeConversationId) {
       startSession();
     }
-  }, [isConnected, isSessionActive, agent, startSession]);
+  }, [activeConversationId, isConnected, isSessionActive, agent, startSession]);
 
   // Update agent state based on messages
   useEffect(() => {
@@ -159,7 +491,7 @@ export default function AgentChatPage() {
     }
 
     const lastMessage = messages[messages.length - 1];
-    if (lastMessage.role === 'user') {
+    if (lastMessage.role === 'user' && awaitingResponse) {
       setAgentState('thinking');
       setCurrentTask('正在理解您的问题...');
     } else if (lastMessage.isToolCall) {
@@ -172,7 +504,7 @@ export default function AgentChatPage() {
       setAgentState('idle');
       setCurrentTask('');
     }
-  }, [messages]);
+  }, [awaitingResponse, messages]);
 
   // Simulate token counting (in real app, this comes from WebSocket)
   useEffect(() => {
@@ -196,10 +528,285 @@ export default function AgentChatPage() {
 
     const message = inputValue.trim();
     setInputValue('');
+    setAwaitingResponse(true);
+    setComposerStatus('');
     sendMessage(message);
   }, [inputValue, sendMessage]);
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
+  const handleQuoteMessage = useCallback((message: { role: string; content: string }) => {
+    appendToComposer(buildQuoteSnippet(message));
+    setComposerStatus('已插入引用');
+  }, [appendToComposer, buildQuoteSnippet]);
+
+  const handleAttachImages = useCallback(async (files: FileList) => {
+    if (!agent || !token || isUploadingImage) return;
+
+    const imageFiles = Array.from(files).filter((file) => file.type.startsWith('image/'));
+    if (imageFiles.length === 0) {
+      setErrorMessage('请选择图片文件');
+      return;
+    }
+
+    setIsUploadingImage(true);
+    setErrorMessage('');
+    setComposerStatus(`正在上传 ${imageFiles.length} 张图片...`);
+
+    try {
+      const snippets: string[] = [];
+
+      for (const file of imageFiles) {
+        const formData = new FormData();
+        formData.append('image', file);
+
+        const res = await fetch(`${API_BASE}/api/agents/${agent.id}/chat-assets`, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+          body: formData,
+        });
+
+        const data = await res.json().catch(() => null);
+        if (!res.ok || !data?.asset) {
+          throw new Error(data?.message || `上传图片失败: ${file.name}`);
+        }
+
+        snippets.push(buildImageAttachmentSnippet(data.asset as UploadedChatAsset));
+      }
+
+      appendToComposer(snippets.join('\n\n'));
+      setComposerStatus(`已插入 ${imageFiles.length} 张图片`);
+    } catch (e) {
+      console.error('Failed to upload chat images:', e);
+      setErrorMessage(e instanceof Error ? e.message : '上传图片失败');
+      setComposerStatus('');
+    } finally {
+      setIsUploadingImage(false);
+    }
+  }, [agent, token, isUploadingImage, buildImageAttachmentSnippet, appendToComposer]);
+
+  const handleSelectConversation = useCallback((conversationId: string) => {
+    if (!conversationId || conversationId === activeConversationId) return;
+    setSessionError('');
+    setAwaitingResponse(false);
+    setRenamingSession(false);
+    setSessionTitleDraft('');
+    setActiveConversationId(conversationId);
+  }, [activeConversationId]);
+
+  const handleStartRenameSession = useCallback(() => {
+    const session = conversationSessions.find((item) => item.id === activeConversationId);
+    setSessionError('');
+    setSessionTitleDraft(session?.title || '');
+    setRenamingSession(true);
+  }, [activeConversationId, conversationSessions]);
+
+  const handleCancelRenameSession = useCallback(() => {
+    setRenamingSession(false);
+    setSessionTitleDraft('');
+  }, []);
+
+  const handleSaveSessionTitle = useCallback(async () => {
+    if (!activeConversationId || !token || savingSessionTitle) return;
+    const title = sessionTitleDraft.trim();
+    if (!title) {
+      setSessionError('请输入Session名称');
+      return;
+    }
+
+    setSavingSessionTitle(true);
+    setSessionError('');
+    try {
+      const res = await fetch(`${API_BASE}/api/conversations/${activeConversationId}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ title }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(data?.message || '重命名Session失败');
+
+      const updated = data.conversation as ConversationSession;
+      setConversationSessions((current) =>
+        current.map((session) =>
+          session.id === activeConversationId
+            ? { ...session, ...updated, title: updated?.title || title }
+            : session
+        )
+      );
+      setRenamingSession(false);
+      setSessionTitleDraft('');
+    } catch (e) {
+      console.error('Failed to rename session:', e);
+      setSessionError(e instanceof Error ? e.message : '重命名Session失败');
+    } finally {
+      setSavingSessionTitle(false);
+    }
+  }, [activeConversationId, savingSessionTitle, sessionTitleDraft, token]);
+
+  const handleNewSession = useCallback(async () => {
+    if (!agent || !token || creatingSession) return;
+    setCreatingSession(true);
+    setSessionError('');
+    try {
+      const session = await createSessionRecord();
+      setConversationSessions((current) => [session, ...current]);
+      setAwaitingResponse(false);
+      setRenamingSession(false);
+      setSessionTitleDraft('');
+      setActiveConversationId(session.id);
+      hydrateMessages([]);
+    } catch (e) {
+      console.error('Failed to create session:', e);
+      setSessionError(e instanceof Error ? e.message : '创建会话失败');
+    } finally {
+      setCreatingSession(false);
+    }
+  }, [agent, token, creatingSession, createSessionRecord, hydrateMessages]);
+
+  const handleDeleteConversation = useCallback(async (conversationId: string) => {
+    if (!token || deletingConversationId) return;
+
+    const targetSession = conversationSessions.find((session) => session.id === conversationId);
+    const targetLabel = targetSession?.title?.trim() || '该对话记录';
+    const confirmed = window.confirm(`是否真的要删除「${targetLabel}」？`);
+    if (!confirmed) return;
+
+    const isActiveConversation = conversationId === activeConversationId;
+    setDeletingConversationId(conversationId);
+    setSessionError('');
+    setAwaitingResponse(false);
+    setRenamingSession(false);
+    setSessionTitleDraft('');
+
+    try {
+      if (isActiveConversation) {
+        stopSession();
+      }
+
+      const res = await fetch(`${API_BASE}/api/conversations/${conversationId}`, {
+        method: 'DELETE',
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        throw new Error(data?.message || '删除对话失败');
+      }
+
+      const remainingSessions = conversationSessions.filter((session) => session.id !== conversationId);
+      if (remainingSessions.length === 0) {
+        const replacementSession = await createSessionRecord('Session 1');
+        setConversationSessions([replacementSession]);
+        setActiveConversationId(replacementSession.id);
+        hydrateMessages([]);
+        return;
+      }
+
+      setConversationSessions(remainingSessions);
+      if (isActiveConversation) {
+        setActiveConversationId(remainingSessions[0].id);
+        hydrateMessages([]);
+      }
+    } catch (e) {
+      console.error('Failed to delete session:', e);
+      setSessionError(e instanceof Error ? e.message : '删除对话失败');
+    } finally {
+      setDeletingConversationId(null);
+    }
+  }, [
+    token,
+    deletingConversationId,
+    conversationSessions,
+    activeConversationId,
+    stopSession,
+    createSessionRecord,
+    hydrateMessages,
+  ]);
+  const handleExportSession = useCallback(async () => {
+    if (!activeConversationId || !token || !agent) return;
+    setSessionError('');
+    try {
+      const res = await fetch(`${API_BASE}/api/conversations/${activeConversationId}/export`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(data?.message || '导出会话失败');
+
+      const exportedSessionId = data.sessionId || currentSessionId || 'no-runtime-session';
+      const exportData = {
+        ...data,
+        sessionId: exportedSessionId,
+        agent: {
+          id: agent.id,
+          name: agent.name,
+          platform: agent.platform,
+        },
+      };
+      const blob = new Blob([JSON.stringify(exportData, null, 2)], {
+        type: 'application/json;charset=utf-8',
+      });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `${agent.name || 'agent'}-${exportedSessionId}.json`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      console.error('Failed to export session:', e);
+      setSessionError(e instanceof Error ? e.message : '导出会话失败');
+    }
+  }, [activeConversationId, agent, currentSessionId, token]);
+
+  const restartAgentSession = useCallback(() => {
+    stopSession();
+    setAgentState('idle');
+    setCurrentTask('');
+    setTimeout(() => {
+      startSession();
+    }, 500);
+  }, [startSession, stopSession]);
+
+  const handleModelChange = useCallback(async (modelId: string) => {
+    if (!agent || !token) return;
+    const previousModel = selectedModel;
+    setSelectedModel(modelId);
+    setSavingModel(true);
+    setModelError('');
+    try {
+      const res = await fetch(`${API_BASE}/api/agents/${agent.id}/config`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ model: modelId }),
+      });
+
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        throw new Error(data?.message || '模型切换失败');
+      }
+
+      setAgent((current) => data?.agent || (current
+        ? { ...current, config: { ...(current.config || {}), model: modelId } }
+        : current
+      ));
+      restartAgentSession();
+    } catch (e) {
+      setSelectedModel(previousModel);
+      setModelError(e instanceof Error ? e.message : '模型切换失败');
+    } finally {
+      setSavingModel(false);
+    }
+  }, [agent, token, selectedModel, restartAgentSession]);
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSend();
@@ -411,8 +1018,36 @@ export default function AgentChatPage() {
               isSessionActive={isSessionActive}
               error={error ?? undefined}
               errorMessage={errorMessage}
-              systemMessagesCollapsed={systemMessagesCollapsed}
-              setSystemMessagesCollapsed={setSystemMessagesCollapsed}
+              activeProvider={activeProvider}
+              selectedModel={selectedModel}
+              savingModel={savingModel}
+              modelError={modelError}
+              onModelChange={handleModelChange}
+              conversationSessions={conversationSessions}
+              activeConversationId={activeConversationId}
+              currentSessionId={currentSessionId}
+              currentConversationId={currentConversationId}
+              sessionsLoading={sessionsLoading}
+              creatingSession={creatingSession}
+              sessionError={sessionError}
+              renamingSession={renamingSession}
+              sessionTitleDraft={sessionTitleDraft}
+              savingSessionTitle={savingSessionTitle}
+              setSessionTitleDraft={setSessionTitleDraft}
+              onSelectConversation={handleSelectConversation}
+              onStartRenameSession={handleStartRenameSession}
+              onCancelRenameSession={handleCancelRenameSession}
+              onSaveSessionTitle={handleSaveSessionTitle}
+              onNewSession={handleNewSession}
+              onExportSession={handleExportSession}
+              onDeleteConversation={handleDeleteConversation}
+              deletingConversationId={deletingConversationId}
+              onStopGenerating={handleStop}
+              canStopGenerating={awaitingResponse || agentState !== 'idle'}
+              onQuoteMessage={handleQuoteMessage}
+              onAttachImages={handleAttachImages}
+              uploadingImage={isUploadingImage}
+              composerStatus={composerStatus}
             />
           )}
           
@@ -453,6 +1088,12 @@ export default function AgentChatPage() {
                 agent={agent}
                 token={token || ''}
                 onClose={() => setShowSettings(false)}
+                onAgentUpdate={(updatedAgent) => {
+                  setAgent((current) => current ? { ...current, ...updatedAgent } : updatedAgent);
+                  setSelectedModel(updatedAgent.config?.model || '');
+                  setModelError('');
+                  restartAgentSession();
+                }}
               />
             </motion.div>
           )}
@@ -469,32 +1110,98 @@ interface ChatViewProps {
   agentState: string;
   messagesEndRef: React.RefObject<HTMLDivElement>;
   inputValue: string;
-  setInputValue: (v: string) => void;
-  handleKeyDown: (e: React.KeyboardEvent) => void;
+  setInputValue: React.Dispatch<React.SetStateAction<string>>;
+  handleKeyDown: (e: React.KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>) => void;
   handleSend: () => void;
   isConnected: boolean;
   isSessionActive: boolean;
   error?: string;
   errorMessage: string;
-  systemMessagesCollapsed: boolean;
-  setSystemMessagesCollapsed: (v: boolean) => void;
+  activeProvider: AgentProvider | null;
+  selectedModel: string;
+  savingModel: boolean;
+  modelError: string;
+  onModelChange: (modelId: string) => void;
+  conversationSessions: ConversationSession[];
+  activeConversationId: string | null;
+  currentSessionId: string | null;
+  currentConversationId: string | null;
+  sessionsLoading: boolean;
+  creatingSession: boolean;
+  sessionError: string;
+  renamingSession: boolean;
+  sessionTitleDraft: string;
+  savingSessionTitle: boolean;
+  setSessionTitleDraft: (title: string) => void;
+  onSelectConversation: (conversationId: string) => void;
+  onStartRenameSession: () => void;
+  onCancelRenameSession: () => void;
+  onSaveSessionTitle: () => void;
+  onNewSession: () => void;
+  onExportSession: () => void;
+  onDeleteConversation: (conversationId: string) => void;
+  deletingConversationId: string | null;
+  onStopGenerating: () => void;
+  canStopGenerating: boolean;
+  onQuoteMessage: (message: { role: string; content: string }) => void;
+  onAttachImages: (files: FileList) => void | Promise<void>;
+  uploadingImage: boolean;
+  composerStatus: string;
 }
 
 function ChatView(props: ChatViewProps) {
-  const { messages, agent, agentState, messagesEndRef, inputValue, setInputValue, handleKeyDown, handleSend, isConnected, isSessionActive, error, errorMessage, systemMessagesCollapsed, setSystemMessagesCollapsed } = props;
-
-  function getMsgClass(msg: any): string {
-    if (msg.role === 'user') return 'bg-pixel-blue text-pixel-white';
-    if (msg.isToolCall) return 'bg-pixel-yellow/50 text-pixel-black';
-    return 'bg-pixel-white text-pixel-black';
-  }
-
-  function getLabel(msg: any): string {
-    if (msg.role === 'user') return '你';
-    if (msg.role === 'system') return '系统';
-    if (msg.content && (msg.content.includes('Agents:') || msg.content.includes('[plugins]'))) return '系统';
-    return agent.name;
-  }
+  const {
+    messages,
+    agent,
+    agentState,
+    messagesEndRef,
+    inputValue,
+    setInputValue,
+    handleKeyDown,
+    handleSend,
+    isConnected,
+    isSessionActive,
+    error,
+    errorMessage,
+    activeProvider,
+    selectedModel,
+    savingModel,
+    modelError,
+    onModelChange,
+    conversationSessions,
+    activeConversationId,
+    currentSessionId,
+    currentConversationId,
+    sessionsLoading,
+    creatingSession,
+    sessionError,
+    renamingSession,
+    sessionTitleDraft,
+    savingSessionTitle,
+    setSessionTitleDraft,
+    onSelectConversation,
+    onStartRenameSession,
+    onCancelRenameSession,
+    onSaveSessionTitle,
+    onNewSession,
+    onExportSession,
+    onDeleteConversation,
+    deletingConversationId,
+    onStopGenerating,
+    canStopGenerating,
+    onQuoteMessage,
+    onAttachImages,
+    uploadingImage,
+    composerStatus,
+  } = props;
+  const [isSessionMenuOpen, setIsSessionMenuOpen] = useState(false);
+  const [hiddenMessageIds, setHiddenMessageIds] = useState<Set<string>>(new Set());
+  const sessionMenuRef = useRef<HTMLDivElement | null>(null);
+  const composerInputRef = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null);
+  const imageInputRef = useRef<HTMLInputElement | null>(null);
+  const providerModelIds = normalizeProviderModels(activeProvider?.models || []);
+  const currentModel = selectedModel || providerModelIds[0] || '';
+  const activeSession = conversationSessions.find((session) => session.id === activeConversationId) || null;
 
   function isSysMsg(msg: any): boolean {
     if (msg.role === 'system') return true;
@@ -502,21 +1209,128 @@ function ChatView(props: ChatViewProps) {
     return msg.content.includes('Agents:') || msg.content.includes('[plugins]') || msg.content.includes('Process exited');
   }
 
-  const userMsgs = messages.filter(m => m.role === 'user');
-  const agentMsgs = messages.filter(m => m.role === 'assistant' && !isSysMsg(m));
-  const sysMsgs = messages.filter(m => isSysMsg(m));
+  function getMsgClass(msg: any): string {
+    if (msg.role === 'user') return 'bg-pixel-blue text-pixel-white';
+    if (isSysMsg(msg)) return 'bg-pixel-black/5 text-pixel-black';
+    if (msg.isToolCall) return 'bg-pixel-yellow/50 text-pixel-black';
+    return 'bg-pixel-white text-pixel-black';
+  }
+
+  function getLabel(msg: any): string {
+    if (msg.role === 'user') return '你';
+    if (isSysMsg(msg)) return '系统';
+    return agent.name;
+  }
+
+  const orderedMessages = messages
+    .map((message, index) => ({ message, index }))
+    .sort((a, b) => {
+      const aTime = new Date(a.message.timestamp).getTime() || 0;
+      const bTime = new Date(b.message.timestamp).getTime() || 0;
+      return aTime - bTime || a.index - b.index;
+    })
+    .filter(({ message }) => !hiddenMessageIds.has(message.id))
+    .map(({ message }) => message);
+
+  useEffect(() => {
+    function handlePointerDown(event: MouseEvent) {
+      if (!sessionMenuRef.current?.contains(event.target as Node)) {
+        setIsSessionMenuOpen(false);
+      }
+    }
+
+    document.addEventListener('mousedown', handlePointerDown);
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+    };
+  }, []);
+
+  useEffect(() => {
+    setHiddenMessageIds(new Set());
+  }, [activeConversationId]);
+
+  function handleRenameKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      onSaveSessionTitle();
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      onCancelRenameSession();
+    }
+  }
+
+  function handleSelectSession(conversationId: string) {
+    setIsSessionMenuOpen(false);
+    onSelectConversation(conversationId);
+  }
+
+  function handleDeleteSession(event: React.MouseEvent<HTMLButtonElement>, conversationId: string) {
+    event.stopPropagation();
+    setIsSessionMenuOpen(false);
+    onDeleteConversation(conversationId);
+  }
+
+  async function handleImageInputChange(event: React.ChangeEvent<HTMLInputElement>) {
+    const files = event.target.files;
+    if (!files || files.length === 0) return;
+    await onAttachImages(files);
+    event.target.value = '';
+    composerInputRef.current?.focus();
+  }
+
+  function handleHideMessage(messageId: string) {
+    setHiddenMessageIds((current) => {
+      const next = new Set(current);
+      next.add(messageId);
+      return next;
+    });
+  }
 
   function renderMessage(msg: any) {
     const cls = getMsgClass(msg);
     const label = getLabel(msg);
+    const userMessage = msg.role === 'user';
+    const systemMessage = isSysMsg(msg);
+    const actionPlacement = userMessage ? 'right-full mr-2 items-end' : 'left-full ml-2 items-start';
+
     return (
-      <motion.div key={msg.id} initial={{ opacity: 0, x: msg.role === 'user' ? 20 : -20 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.05 }} className={`mb-4 ${msg.role === 'user' ? 'text-right' : 'text-left'}`}>
-        <div className={`font-pixel text-xs mb-1 ${msg.role === 'user' ? 'text-pixel-blue' : 'text-pixel-yellow'}`}>
+      <motion.div
+        key={msg.id}
+        initial={{ opacity: 0, x: userMessage ? 20 : -20 }}
+        animate={{ opacity: 1, x: 0 }}
+        transition={{ delay: 0.05 }}
+        className={`group mb-4 ${userMessage ? 'text-right' : 'text-left'}`}
+      >
+        <div className={`mb-1 text-xs ${userMessage ? 'font-pixel text-pixel-blue' : systemMessage ? 'font-mono text-pixel-black/60' : 'font-pixel text-pixel-yellow'}`}>
           {label}
           {msg.isToolCall && <span className="ml-2 text-pixel-black/50">[工具: {msg.toolName}]</span>}
         </div>
-        <div className={`inline-block max-w-[85%] px-4 py-3 font-pixel text-sm leading-relaxed whitespace-pre-wrap break-words border-4 border-pixel-black ${cls}`} style={{ boxShadow: '4px 4px 0px 0px #101010' }}>
-          {msg.role === 'user' ? msg.content : <MessageRenderer content={msg.content} />}
+        <div className="relative inline-block max-w-[85%]">
+          <div
+            className={`absolute top-8 flex flex-col gap-1 ${actionPlacement} opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100`}
+          >
+            {!systemMessage && (
+              <MessageActionButton
+                title="引用"
+                onClick={() => {
+                  onQuoteMessage({ role: msg.role, content: msg.content });
+                  composerInputRef.current?.focus();
+                }}
+              >
+                <QuoteIcon />
+              </MessageActionButton>
+            )}
+            <MessageActionButton title="隐藏此消息" onClick={() => handleHideMessage(msg.id)}>
+              <HideIcon />
+            </MessageActionButton>
+          </div>
+          <div
+            className={`px-4 py-3 leading-relaxed whitespace-pre-wrap break-words border-4 border-pixel-black ${systemMessage ? 'font-mono text-xs' : 'font-pixel text-sm'} ${cls}`}
+            style={{ boxShadow: '4px 4px 0px 0px #101010' }}
+          >
+            <MessageRenderer content={msg.content} tone={userMessage ? 'inverse' : 'default'} />
+          </div>
         </div>
       </motion.div>
     );
@@ -524,51 +1338,169 @@ function ChatView(props: ChatViewProps) {
 
   return (
     <div className="max-w-4xl mx-auto p-4">
-      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.2 }} className="rpg-dialog relative">
+      <div className="mb-3 border-4 border-pixel-black bg-pixel-white p-3" style={{ boxShadow: '4px 4px 0px 0px #101010' }}>
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
+          <div className="relative min-w-0 flex-1" ref={sessionMenuRef}>
+            <button
+              type="button"
+              onClick={() => setIsSessionMenuOpen((open) => !open)}
+              disabled={sessionsLoading || conversationSessions.length === 0}
+              className="flex h-10 w-full items-center gap-3 border-4 border-pixel-black bg-pixel-white px-3 text-left disabled:opacity-50"
+            >
+              <div className="min-w-0 flex-1">
+                <div className="truncate font-pixel text-xs text-pixel-black">
+                  {activeSession?.title || '暂无对话'}
+                </div>
+                <div className="truncate font-mono text-[10px] text-pixel-black/50">
+                  {sessionsLoading ? 'loading...' : activeSession ? `${activeSession.messageCount} messages` : 'waiting'}
+                </div>
+              </div>
+              <span className="font-mono text-sm text-pixel-black/70">
+                {isSessionMenuOpen ? '▲' : '▼'}
+              </span>
+            </button>
+
+            <AnimatePresence>
+              {isSessionMenuOpen && conversationSessions.length > 0 && (
+                <motion.div
+                  initial={{ opacity: 0, y: -6 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -6 }}
+                  className="absolute left-0 right-0 top-[calc(100%+8px)] z-30 max-h-72 overflow-y-auto border-4 border-pixel-black bg-pixel-white p-1"
+                  style={{ boxShadow: '4px 4px 0px 0px #101010' }}
+                >
+                  {conversationSessions.map((session, index) => {
+                    const isActive = session.id === activeConversationId;
+                    const isDeleting = deletingConversationId === session.id;
+
+                    return (
+                      <div
+                        key={session.id}
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => !isDeleting && handleSelectSession(session.id)}
+                        onKeyDown={(event) => {
+                          if ((event.key === 'Enter' || event.key === ' ') && !isDeleting) {
+                            event.preventDefault();
+                            handleSelectSession(session.id);
+                          }
+                        }}
+                        className={`group flex items-center gap-3 px-3 py-2 ${
+                          isActive ? 'bg-pixel-black text-pixel-white' : 'cursor-pointer text-pixel-black hover:bg-pixel-black/10'
+                        }`}
+                      >
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate font-pixel text-xs">
+                            {session.title || `Session ${conversationSessions.length - index}`}
+                          </div>
+                          <div className={`truncate font-mono text-[10px] ${isActive ? 'text-pixel-white/70' : 'text-pixel-black/50'}`}>
+                            {session.messageCount} messages
+                            {session.sessionId ? ` • ${session.sessionId}` : ''}
+                          </div>
+                        </div>
+                        {isActive && (
+                          <span className="font-pixel text-[10px] text-pixel-white/80">
+                            当前
+                          </span>
+                        )}
+                        <button
+                          type="button"
+                          onClick={(event) => handleDeleteSession(event, session.id)}
+                          disabled={isDeleting}
+                          className={`border-2 border-pixel-black px-2 py-1 font-pixel text-[10px] transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 ${
+                            isActive
+                              ? 'bg-pixel-white text-pixel-black opacity-0'
+                              : 'bg-pixel-yellow text-pixel-black opacity-0'
+                          } disabled:cursor-not-allowed disabled:opacity-100`}
+                        >
+                          {isDeleting ? '删除中' : '删除'}
+                        </button>
+                      </div>
+                    );
+                  })}
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+          <div className="min-w-0 flex-1 font-mono text-[11px] text-pixel-black/70 truncate">
+            sessionId: {currentSessionId || conversationSessions.find((session) => session.id === activeConversationId)?.sessionId || 'waiting'}
+          </div>
+          <div className="flex gap-2">
+            <button
+              onClick={onStartRenameSession}
+              disabled={!activeConversationId || renamingSession}
+              className="border-4 border-pixel-black bg-pixel-white px-3 py-2 font-pixel text-xs text-pixel-black disabled:opacity-50"
+            >
+              重命名
+            </button>
+            <button
+              onClick={onNewSession}
+              disabled={creatingSession}
+              className="border-4 border-pixel-black bg-pixel-yellow px-3 py-2 font-pixel text-xs text-pixel-black disabled:opacity-50"
+            >
+              {creatingSession ? '创建中' : '新对话'}
+            </button>
+            <button
+              onClick={onExportSession}
+              disabled={!activeConversationId}
+              className="border-4 border-pixel-black bg-pixel-blue px-3 py-2 font-pixel text-xs text-pixel-white disabled:opacity-50"
+            >
+              导出
+            </button>
+          </div>
+        </div>
+        {renamingSession && (
+          <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+            <input
+              value={sessionTitleDraft}
+              onChange={(event) => setSessionTitleDraft(event.target.value)}
+              onKeyDown={handleRenameKeyDown}
+              maxLength={80}
+              autoFocus
+              className="h-10 min-w-0 flex-1 border-4 border-pixel-black bg-pixel-white px-3 font-pixel text-xs text-pixel-black"
+              placeholder="输入对话名称"
+            />
+            <button
+              onClick={onSaveSessionTitle}
+              disabled={savingSessionTitle || !sessionTitleDraft.trim()}
+              className="border-4 border-pixel-black bg-pixel-blue px-3 py-2 font-pixel text-xs text-pixel-white disabled:opacity-50"
+            >
+              {savingSessionTitle ? '保存中' : '保存'}
+            </button>
+            <button
+              onClick={onCancelRenameSession}
+              disabled={savingSessionTitle}
+              className="border-4 border-pixel-black bg-pixel-white px-3 py-2 font-pixel text-xs text-pixel-black disabled:opacity-50"
+            >
+              取消
+            </button>
+          </div>
+        )}
+        {(sessionError || currentConversationId) && (
+          <div className="mt-2 font-pixel text-[10px] text-pixel-black/50">
+            {sessionError || `conversation: ${currentConversationId || activeConversationId}`}
+          </div>
+        )}
+      </div>
+      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.2 }} className="rpg-dialog relative flex h-[800px] flex-col">
         <div className="absolute top-0 left-0 w-6 h-6 bg-pixel-white border-r-4 border-b-4 border-pixel-black z-10" />
         <div className="absolute top-0 right-0 w-6 h-6 bg-pixel-white border-l-4 border-b-4 border-pixel-black z-10" />
         <div className="absolute bottom-0 left-0 w-6 h-6 bg-pixel-white border-r-4 border-t-4 border-pixel-black z-10" />
         <div className="absolute bottom-0 right-0 w-6 h-6 bg-pixel-white border-l-4 border-t-4 border-pixel-black z-10" />
 
-        <div className="p-6 min-h-[400px] max-h-[60vh] overflow-y-auto">
+        <div className="min-h-0 flex-1 overflow-y-auto p-6">
           {messages.length === 0 && (
             <div className="text-center py-8">
               <div className="font-pixel text-lg text-pixel-black/60 mb-2">对话开始</div>
               <div className="font-pixel text-sm text-pixel-black/40">
-                {isConnected ? (isSessionActive ? 'Agent 已启动，开始对话吧' : '正在启动 Agent...') : '正在连接...'}
+                {isConnected ? (isSessionActive ? 'Agent 已连接，开始对话吧' : '正在启动 Agent...') : '正在连接...'}
               </div>
             </div>
           )}
 
           <AnimatePresence>
-            {userMsgs.map((msg, idx) => renderMessage(msg))}
-            {agentMsgs.map((msg) => renderMessage(msg))}
+            {orderedMessages.map((msg) => renderMessage(msg))}
           </AnimatePresence>
-
-          {sysMsgs.length > 0 && (
-            <div className="mb-4 text-left">
-              <button
-                onClick={() => setSystemMessagesCollapsed(!systemMessagesCollapsed)}
-                className="flex items-center gap-2 mb-2 hover:bg-pixel-black/10 px-2 py-1 -ml-2 transition-colors"
-              >
-                <span className="font-mono text-sm text-pixel-black/60">
-                  {systemMessagesCollapsed ? '▶' : '▼'}
-                </span>
-                <span className="font-pixel text-sm text-pixel-black/60">
-                  {systemMessagesCollapsed ? `系统消息 (${sysMsgs.length})` : `系统消息 (${sysMsgs.length})`}
-                </span>
-              </button>
-              {!systemMessagesCollapsed && (
-                <div className="space-y-3 pl-2 border-l-4 border-pixel-black/20">
-                  {sysMsgs.map((msg) => (
-                    <div key={msg.id} className="inline-block max-w-[85%] bg-pixel-black/5 border-4 border-pixel-black px-4 py-3 font-mono text-xs" style={{ boxShadow: '4px 4px 0px 0px #101010' }}>
-                      <MessageRenderer content={msg.content} />
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
 
           {agentState === 'thinking' && messages.length > 0 && (
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="text-left mb-4">
@@ -583,22 +1515,99 @@ function ChatView(props: ChatViewProps) {
           <div ref={messagesEndRef} />
         </div>
 
-        <div className="border-t-4 border-pixel-white p-4 bg-pixel-black/90">
-          <div className="flex gap-3">
-            <PixelInput value={inputValue} onChange={setInputValue} onKeyDown={handleKeyDown} placeholder="向 Agent 提问..." className="flex-1" disabled={!isConnected} />
-            <PixelButton onClick={handleSend} disabled={!inputValue.trim() || !isConnected} variant="primary">发送</PixelButton>
+        <div className="border-t-4 border-pixel-white bg-pixel-black/50 p-4">
+          <input
+            ref={imageInputRef}
+            type="file"
+            accept="image/*"
+            multiple
+            className="hidden"
+            onChange={handleImageInputChange}
+          />
+          <div className="grid h-12 grid-cols-[36px_156px_minmax(0,1fr)_64px] gap-2">
+            <button
+              type="button"
+              title={uploadingImage ? '正在上传图片' : '上传图片'}
+              aria-label={uploadingImage ? '正在上传图片' : '上传图片'}
+              onClick={() => imageInputRef.current?.click()}
+              disabled={!isConnected || !activeConversationId || uploadingImage}
+              className="flex h-full w-full items-center justify-center border-4 border-pixel-black bg-pixel-white text-pixel-black transition-colors hover:bg-pixel-yellow disabled:opacity-50"
+              style={{ boxShadow: '2px 2px 0px 0px #101010' }}
+            >
+              <PlusIcon className="h-4 w-4" />
+            </button>
+            <select
+              value={currentModel}
+              onChange={(e) => onModelChange(e.target.value)}
+              disabled={!isConnected || providerModelIds.length === 0 || savingModel}
+              className="h-full min-w-0 border-4 border-pixel-black bg-pixel-white px-2 font-pixel text-xs text-pixel-black disabled:opacity-50"
+              title={activeProvider ? `当前供应商：${activeProvider.name}` : '暂无可用供应商'}
+            >
+              {providerModelIds.length === 0 ? (
+                <option value="">暂无可用模型</option>
+              ) : (
+                providerModelIds.map((modelId) => (
+                  <option key={modelId} value={modelId}>
+                    {getModelDisplayName(modelId)}
+                  </option>
+                ))
+              )}
+            </select>
+            <PixelInput
+              ref={composerInputRef}
+              value={inputValue}
+              onChange={setInputValue}
+              onKeyDown={handleKeyDown}
+              placeholder="给 Agent 发消息..."
+              className="h-full min-h-0 min-w-0 resize-none overflow-y-auto px-3 py-2 text-xs leading-5"
+              disabled={!isConnected || !activeConversationId || uploadingImage}
+              multiline
+              compactMultiline
+              rows={1}
+            />
+            <button
+              type="button"
+              onClick={handleSend}
+              disabled={!inputValue.trim() || !isConnected || !activeConversationId || uploadingImage}
+              className="h-full w-full border-4 border-pixel-brown bg-pixel-red px-0 py-0 font-pixel text-xs text-pixel-white whitespace-nowrap transition-colors hover:bg-pixel-orange disabled:cursor-not-allowed disabled:opacity-50"
+              style={{ boxShadow: !inputValue.trim() || !isConnected || !activeConversationId || uploadingImage ? '2px 2px 0px 0px #666' : '2px 2px 0px 0px #101010' }}
+            >
+              发送
+            </button>
           </div>
+          {(savingModel || composerStatus || canStopGenerating || !isConnected) && (
+            <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+              <div className="flex min-h-[18px] items-center gap-3">
+                {savingModel && <p className="font-pixel text-[10px] text-pixel-white/50">正在切换模型...</p>}
+                {!savingModel && composerStatus && (
+                  <span className="font-pixel text-[10px] text-pixel-white/70">{composerStatus}</span>
+                )}
+                {!savingModel && !composerStatus && !isConnected && (
+                  <span className="font-pixel text-[10px] text-pixel-white/45">正在连接 {agent.name}...</span>
+                )}
+              </div>
+              {canStopGenerating && (
+                <button
+                  type="button"
+                  onClick={onStopGenerating}
+                  className="border-4 border-pixel-black bg-pixel-red px-2 py-1 font-pixel text-[10px] text-pixel-white"
+                  style={{ boxShadow: '3px 3px 0px 0px #101010' }}
+                >
+                  终止
+                </button>
+              )}
+            </div>
+          )}
           <div className="mt-3 text-center">
             {error && <p className="font-pixel text-xs text-pixel-yellow">{error}</p>}
             {errorMessage && <p className="font-pixel text-xs text-pixel-yellow">{errorMessage}</p>}
-            <p className="font-pixel text-xs text-pixel-white/40 mt-1">{isConnected ? `已连接到 ${agent.name}` : `正在连接到 ${agent.name}...`}</p>
+            {modelError && <p className="font-pixel text-xs text-pixel-yellow">{modelError}</p>}
           </div>
         </div>
       </motion.div>
     </div>
   );
 }
-
 // Monitor View Component
 interface MonitorViewProps {
   agent: Agent;

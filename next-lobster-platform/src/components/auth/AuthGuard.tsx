@@ -1,9 +1,9 @@
 'use client';
 
-import { useEffect, useState, ReactNode } from 'react';
+import Link from 'next/link';
+import { useEffect, ReactNode } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import { useAuthStore } from '@/store/useAuthStore';
-import { motion } from 'framer-motion';
 
 const PUBLIC_PATHS = ['/', '/auth/login', '/auth/register'];
 
@@ -14,45 +14,44 @@ interface AuthGuardProps {
 export function AuthGuard({ children }: AuthGuardProps) {
   const router = useRouter();
   const pathname = usePathname();
-  const { token } = useAuthStore();
-  const [checked, setChecked] = useState(false);
-  const [hydrated, setHydrated] = useState(false);
-
-  // Wait for zustand persist to rehydrate from localStorage
-  useEffect(() => {
-    setHydrated(true);
-  }, []);
+  const { token, hasHydrated } = useAuthStore();
+  const isPublic = PUBLIC_PATHS.some(
+    (p) => pathname === p || pathname.startsWith('/auth/')
+  );
 
   useEffect(() => {
-    if (!hydrated) return;
-
-    const isPublic = PUBLIC_PATHS.some(
-      (p) => pathname === p || pathname.startsWith('/auth/')
-    );
-
-    if (!isPublic && !token) {
+    if (!isPublic && hasHydrated && !token) {
       router.replace('/auth/login');
-      return;
     }
+  }, [token, hasHydrated, isPublic, router]);
 
-    setChecked(true);
-  }, [token, hydrated, pathname, router]);
+  if (isPublic) {
+    return <>{children}</>;
+  }
 
-  if (!hydrated || !checked) {
+  if (!hasHydrated) {
     return (
-      <motion.div
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        className="min-h-[60vh] flex flex-col items-center justify-center"
-      >
-        <motion.div
-          animate={{ rotate: 360 }}
-          transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}
-          className="w-16 h-16 border-8 border-pixel-black border-t-pixel-red mx-auto mb-4"
-          style={{ boxShadow: '4px 4px 0px 0px #101010' }}
-        />
-        <p className="font-pixel text-pixel-black/60">LOADING...</p>
-      </motion.div>
+      <div className="flex min-h-[60vh] items-center justify-center text-center">
+        <p className="font-pixel text-sm text-pixel-black/50">加载登录状态...</p>
+      </div>
+    );
+  }
+
+  if (!token) {
+    return (
+      <div className="flex min-h-[60vh] flex-col items-center justify-center text-center">
+        <div className="border-4 border-pixel-black bg-pixel-white p-6" style={{ boxShadow: '6px 6px 0 #101010' }}>
+          <p className="font-pixel text-xl text-pixel-black">需要登录后继续</p>
+          <p className="mt-2 font-pixel text-sm text-pixel-black/60">正在前往登录页，也可以直接点击下方按钮。</p>
+          <Link
+            href="/auth/login"
+            className="mt-4 inline-block border-4 border-pixel-black bg-pixel-blue px-5 py-3 font-pixel text-pixel-white"
+            style={{ boxShadow: '4px 4px 0 #101010' }}
+          >
+            去登录
+          </Link>
+        </div>
+      </div>
     );
   }
 

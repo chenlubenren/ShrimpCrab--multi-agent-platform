@@ -1,84 +1,125 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { PixelButton } from '@/components/ui/PixelButton';
 import { useAuthStore } from '@/store/useAuthStore';
+import {
+  PROVIDER_TYPES,
+  findPresetForProvider,
+  getModelDisplayName,
+  getPresetByKey,
+  getPresetsForType,
+  getProviderTypeLabel,
+  normalizeProviderModels,
+  type ProviderPreset,
+  type ProviderType,
+} from '@/lib/providerPresets';
 
 const API_BASE = 'http://localhost:3002';
-
-interface ProviderModel {
-  id: string;
-  name: string;
-}
 
 interface Provider {
   id: string;
   name: string;
-  type: 'claude' | 'openai' | 'gemini' | 'openclaw';
+  type: ProviderType;
   apiKey: string;
-  baseUrl?: string;
-  models: ProviderModel[];
+  baseUrl?: string | null;
+  models: unknown[];
   isDefault: boolean;
 }
 
 interface ProviderModalProps {
   onClose: () => void;
-  onSaved: () => void;
+  onSaved: () => void | Promise<void>;
   editProvider?: Provider | null;
 }
 
-const PROVIDER_TYPES = [
-  { value: 'claude', label: 'Claude', icon: '🧠', url: 'https://console.anthropic.com/settings/keys', keyField: 'ANTHROPIC_API_KEY' },
-  { value: 'openai', label: 'OpenAI', icon: '🤖', url: 'https://platform.openai.com/api-keys', keyField: 'OPENAI_API_KEY' },
-  { value: 'gemini', label: 'Gemini', icon: '✨', url: 'https://aistudio.google.com/app/apikey', keyField: 'GEMINI_API_KEY' },
-  { value: 'openclaw', label: 'OpenClaw', icon: '🦞', url: '', keyField: 'OPENCLAW_API_KEY' },
-];
+function parseModels(raw: unknown): unknown[] {
+  if (Array.isArray(raw)) return raw;
+  if (typeof raw !== 'string') return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
 
-const DEFAULT_MODELS: Record<string, ProviderModel[]> = {
-  claude: [
-    { id: 'claude-opus-4-7', name: 'Claude Opus 4.7' },
-    { id: 'claude-sonnet-4-7', name: 'Claude Sonnet 4.7' },
-    { id: 'claude-haiku-4-7', name: 'Claude Haiku 4.7' },
-    { id: 'claude-3-5-sonnet', name: 'Claude 3.5 Sonnet' },
-    { id: 'claude-3-5-haiku', name: 'Claude 3.5 Haiku' },
-  ],
-  openai: [
-    { id: 'gpt-4o', name: 'GPT-4o' },
-    { id: 'gpt-4o-mini', name: 'GPT-4o Mini' },
-    { id: 'gpt-4-turbo', name: 'GPT-4 Turbo' },
-    { id: 'o1', name: 'o1' },
-    { id: 'o1-mini', name: 'o1 Mini' },
-  ],
-  gemini: [
-    { id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash' },
-    { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash' },
-    { id: 'gemini-1.5-pro', name: 'Gemini 1.5 Pro' },
-  ],
-  openclaw: [
-    { id: 'claude-sonnet', name: 'Claude Sonnet (OpenClaw)' },
-    { id: 'claude-opus', name: 'Claude Opus (OpenClaw)' },
-  ],
-};
+function maskKey(apiKey: string): string {
+  if (!apiKey) return 'not set';
+  if (apiKey.length <= 12) return `${apiKey.slice(0, 4)}...`;
+  return `${apiKey.slice(0, 8)}...${apiKey.slice(-4)}`;
+}
+
+function getEquivalentPreset(provider: Provider, targetType: ProviderType): ProviderPreset | undefined {
+  const sourcePreset = findPresetForProvider(provider.type, provider.baseUrl, provider.models);
+  const presetSuffix = sourcePreset?.key.split(':')[1];
+  return presetSuffix ? getPresetByKey(`${targetType}:${presetSuffix}`) : undefined;
+}
+
+function buildCopiedProvider(provider: Provider, targetType: ProviderType) {
+  const targetPreset = getEquivalentPreset(provider, targetType);
+  const copiedModels = targetPreset?.models.length
+    ? targetPreset.models.map((model) => model.id)
+    : normalizeProviderModels(provider.models);
+
+  return {
+    name: `${provider.name} (${getProviderTypeLabel(targetType)})`,
+    type: targetType,
+    apiKey: provider.apiKey,
+    baseUrl: targetPreset?.baseUrl ?? provider.baseUrl ?? undefined,
+    models: copiedModels,
+  };
+}
 
 export function ProviderModal({ onClose, onSaved, editProvider }: ProviderModalProps) {
   const { token } = useAuthStore();
-  const [name, setName] = useState(editProvider?.name || '');
-  const [type, setType] = useState<string>(editProvider?.type || 'claude');
+  const [type, setType] = useState<ProviderType>(editProvider?.type || 'claude');
+  const presets = useMemo(() => getPresetsForType(type), [type]);
+  const initialPreset = editProvider
+    ? findPresetForProvider(editProvider.type, editProvider.baseUrl, editProvider.models)
+    : presets[0];
+
+  const [selectedPresetKey, setSelectedPresetKey] = useState(initialPreset?.key || '');
+  const selectedPreset = getPresetByKey(selectedPresetKey) || presets[0];
+  const baseUrlEditable = Boolean(selectedPreset?.isCustom);
+  const presetModelIds = new Set((selectedPreset?.models || []).map((model) => model.id));
+
+  const [name, setName] = useState(editProvider?.name || selectedPreset?.label || '');
   const [apiKey, setApiKey] = useState(editProvider?.apiKey || '');
-  const [baseUrl, setBaseUrl] = useState(editProvider?.baseUrl || '');
+  const [baseUrl, setBaseUrl] = useState(editProvider?.baseUrl || selectedPreset?.baseUrl || '');
   const [selectedModels, setSelectedModels] = useState<string[]>(
-    editProvider?.models.map(m => m.id) || []
+    editProvider ? normalizeProviderModels(editProvider.models) : (selectedPreset?.models || []).map((model) => model.id)
   );
+  const [customModel, setCustomModel] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
-  const providerType = PROVIDER_TYPES.find(p => p.value === type);
+  const applyPreset = (preset: ProviderPreset, keepName = false) => {
+    setSelectedPresetKey(preset.key);
+    setBaseUrl(preset.baseUrl || '');
+    setSelectedModels(preset.models.map((model) => model.id));
+    if (!keepName) setName(preset.label);
+  };
+
+  const changeType = (nextType: ProviderType) => {
+    setType(nextType);
+    const firstPreset = getPresetsForType(nextType)[0];
+    if (firstPreset) applyPreset(firstPreset);
+  };
 
   const toggleModel = (modelId: string) => {
-    setSelectedModels(prev =>
-      prev.includes(modelId) ? prev.filter(m => m !== modelId) : [...prev, modelId]
+    setSelectedModels((prev) =>
+      prev.includes(modelId) ? prev.filter((item) => item !== modelId) : [...prev, modelId]
     );
+  };
+
+  const addCustomModel = () => {
+    const trimmed = customModel.trim();
+    if (trimmed && !selectedModels.includes(trimmed)) {
+      setSelectedModels((prev) => [...prev, trimmed]);
+      setCustomModel('');
+    }
   };
 
   const handleSave = async () => {
@@ -90,14 +131,18 @@ export function ProviderModal({ onClose, onSaved, editProvider }: ProviderModalP
       setError('请至少选择一个模型');
       return;
     }
+
     setSaving(true);
     setError('');
     try {
+      const effectiveBaseUrl = baseUrlEditable
+        ? baseUrl.trim()
+        : (selectedPreset?.baseUrl || baseUrl).trim();
       const body = {
         name: name.trim(),
-        type,
+        type: editProvider?.type || type,
         apiKey: apiKey.trim(),
-        baseUrl: baseUrl.trim() || undefined,
+        baseUrl: effectiveBaseUrl || undefined,
         models: selectedModels,
       };
       const res = await fetch(`${API_BASE}/api/providers${editProvider ? `/${editProvider.id}` : ''}`, {
@@ -108,8 +153,9 @@ export function ProviderModal({ onClose, onSaved, editProvider }: ProviderModalP
         },
         body: JSON.stringify(body),
       });
-      if (!res.ok) throw new Error('保存失败');
-      onSaved();
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(data?.message || '保存失败');
+      await onSaved();
       onClose();
     } catch (e) {
       setError(e instanceof Error ? e.message : '保存失败');
@@ -121,89 +167,136 @@ export function ProviderModal({ onClose, onSaved, editProvider }: ProviderModalP
   return (
     <AnimatePresence>
       <motion.div
-        initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-        className="fixed inset-0 z-50 flex items-center justify-center bg-pixel-black/50"
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        className="fixed inset-0 z-50 flex items-center justify-center bg-pixel-black/50 p-4"
         onClick={onClose}
       >
         <motion.div
-          initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }}
-          className="bg-pixel-white border-8 border-pixel-black w-full max-w-lg mx-4 max-h-[90vh] overflow-y-auto"
+          initial={{ scale: 0.9, opacity: 0 }}
+          animate={{ scale: 1, opacity: 1 }}
+          exit={{ scale: 0.9, opacity: 0 }}
+          className="bg-pixel-white border-8 border-pixel-black w-full max-w-3xl max-h-[90vh] overflow-y-auto"
           style={{ boxShadow: '8px 8px 0px 0px #101010' }}
-          onClick={e => e.stopPropagation()}
+          onClick={(e) => e.stopPropagation()}
         >
           <div className="bg-pixel-yellow border-b-4 border-pixel-black px-6 py-4 flex items-center justify-between">
-            <h2 className="font-pixel text-xl text-pixel-black flex items-center gap-2">
-              <span>{providerType?.icon}</span> {editProvider ? '编辑供应商' : '新增供应商'}
+            <h2 className="font-pixel text-xl text-pixel-black">
+              {editProvider ? '编辑供应商' : '新增供应商'}
             </h2>
-            <button onClick={onClose} className="font-pixel text-pixel-black hover:text-pixel-red text-2xl leading-none">×</button>
+            <button onClick={onClose} className="font-pixel text-pixel-black hover:text-pixel-red text-2xl leading-none">
+              x
+            </button>
           </div>
 
           <div className="p-6 space-y-5">
-            {/* Provider Type */}
             <div>
-              <label className="font-pixel text-xs text-pixel-black/60 mb-2 block">供应商类型</label>
-              <div className="grid grid-cols-2 gap-2">
-                {PROVIDER_TYPES.map(pt => (
+              <label className="font-pixel text-xs text-pixel-black/60 mb-2 block">Agent 平台</label>
+              <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
+                {PROVIDER_TYPES.map((item) => (
                   <button
-                    key={pt.value}
-                    onClick={() => { setType(pt.value); setSelectedModels([]); }}
-                    className={`px-4 py-3 border-4 font-pixel text-sm flex items-center gap-2 transition-colors ${
-                      type === pt.value
+                    key={item.key}
+                    type="button"
+                    onClick={() => changeType(item.key)}
+                    disabled={Boolean(editProvider)}
+                    className={`px-3 py-2 border-4 font-pixel text-xs transition-colors ${
+                      type === item.key
                         ? 'border-pixel-black bg-pixel-yellow'
                         : 'border-pixel-black/30 bg-pixel-white hover:bg-pixel-yellow/30'
-                    }`}
+                    } disabled:opacity-50 disabled:cursor-not-allowed`}
                   >
-                    <span>{pt.icon}</span> {pt.label}
+                    {item.label}
                   </button>
                 ))}
               </div>
             </div>
 
-            {/* Name */}
+            <div>
+              <label className="font-pixel text-xs text-pixel-black/60 mb-2 block">常用供应商</label>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {presets.map((preset) => (
+                  <button
+                    key={preset.key}
+                    type="button"
+                    onClick={() => applyPreset(preset, Boolean(editProvider))}
+                    className={`text-left border-4 p-3 transition-colors ${
+                      selectedPresetKey === preset.key
+                        ? 'border-pixel-black bg-pixel-yellow/30'
+                        : 'border-pixel-black/25 bg-pixel-white hover:border-pixel-black'
+                  }`}
+                >
+                  <div className="font-pixel text-base font-bold mb-1">{preset.label}</div>
+                  <div className="font-pixel text-xs text-pixel-black/55">{preset.description}</div>
+                    {preset.baseUrl && (
+                      <div className="font-mono text-[11px] text-pixel-black/45 mt-2 truncate">
+                        {preset.baseUrl}
+                      </div>
+                    )}
+                  </button>
+                ))}
+              </div>
+            </div>
+
             <div>
               <label className="font-pixel text-xs text-pixel-black/60 mb-1 block">供应商名称</label>
               <input
-                type="text" value={name} onChange={e => setName(e.target.value)}
-                placeholder="例如：我的 Claude"
+                type="text"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="例如：我的 Kimi"
                 className="w-full px-4 py-2 border-4 border-pixel-black font-pixel bg-pixel-white"
               />
             </div>
 
-            {/* API Key */}
             <div>
               <label className="font-pixel text-xs text-pixel-black/60 mb-1 block">
-                {providerType?.keyField}
+                {selectedPreset?.apiKeyField || 'API_KEY'}
               </label>
               <input
-                type="password" value={apiKey} onChange={e => setApiKey(e.target.value)}
-                placeholder="sk-..."
+                type="password"
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+                placeholder="输入 API Key"
                 className="w-full px-4 py-2 border-4 border-pixel-black font-pixel bg-pixel-white"
               />
-              {providerType?.url && (
-                <a href={providerType.url} target="_blank" rel="noopener noreferrer"
-                   className="font-pixel text-xs text-pixel-blue hover:underline mt-1 inline-block">
-                  获取 API Key →
-                </a>
-              )}
+              <div className="flex flex-wrap gap-3 mt-1">
+                {selectedPreset?.apiKeyUrl && (
+                  <a href={selectedPreset.apiKeyUrl} target="_blank" rel="noopener noreferrer" className="font-pixel text-xs text-pixel-blue hover:underline">
+                    获取 API Key
+                  </a>
+                )}
+                {selectedPreset?.docsUrl && (
+                  <a href={selectedPreset.docsUrl} target="_blank" rel="noopener noreferrer" className="font-pixel text-xs text-pixel-blue hover:underline">
+                    官方文档
+                  </a>
+                )}
+              </div>
             </div>
 
-            {/* Base URL */}
-            {(type === 'openclaw' || type === 'openai') && (
-              <div>
-                <label className="font-pixel text-xs text-pixel-black/60 mb-1 block">自定义 Base URL（可选）</label>
-                <input
-                  type="text" value={baseUrl} onChange={e => setBaseUrl(e.target.value)}
-                  placeholder={type === 'openclaw' ? 'https://api.openclaw.com/v1' : 'https://api.openai.com/v1'}
-                  className="w-full px-4 py-2 border-4 border-pixel-black font-pixel bg-pixel-white"
-                />
-              </div>
-            )}
+            <div>
+              <label className="font-pixel text-xs text-pixel-black/60 mb-1 block">Base URL</label>
+              <input
+                type="text"
+                value={baseUrl}
+                onChange={(e) => setBaseUrl(e.target.value)}
+                disabled={!baseUrlEditable}
+                placeholder={selectedPreset?.baseUrlHelp || 'https://api.example.com/v1'}
+                className={`w-full px-4 py-2 border-4 border-pixel-black font-mono text-sm ${
+                  baseUrlEditable ? 'bg-pixel-white' : 'bg-pixel-black/5 text-pixel-black/55 cursor-not-allowed'
+                }`}
+              />
+              <p className="font-pixel text-xs text-pixel-black/40 mt-1">
+                {baseUrlEditable
+                  ? selectedPreset?.baseUrlHelp || '按供应商官方要求填写。'
+                  : '官方预设的 Base URL 已锁定，避免误改导致供应商不可用。'}
+              </p>
+            </div>
 
-            {/* Models */}
             <div>
               <label className="font-pixel text-xs text-pixel-black/60 mb-2 block">支持的模型（可多选）</label>
-              <div className="space-y-1">
-                {(DEFAULT_MODELS[type] || []).map(model => (
+              <div className="space-y-1 max-h-56 overflow-y-auto border-4 border-pixel-black/20 p-2">
+                {(selectedPreset?.models || []).map((model) => (
                   <label key={model.id} className="flex items-center gap-2 px-3 py-2 border-2 border-pixel-black/20 hover:border-pixel-black cursor-pointer transition-colors">
                     <input
                       type="checkbox"
@@ -212,9 +305,44 @@ export function ProviderModal({ onClose, onSaved, editProvider }: ProviderModalP
                       className="w-4 h-4"
                     />
                     <span className="font-pixel text-sm">{model.name}</span>
-                    <span className="font-mono text-xs text-pixel-black/40 ml-auto">{model.id}</span>
+                    <span className="font-mono text-xs text-pixel-black/40 ml-auto truncate">{model.id}</span>
                   </label>
                 ))}
+                {selectedModels.filter((modelId) => !presetModelIds.has(modelId)).map((modelId) => (
+                  <div key={modelId} className="flex items-center gap-2 px-3 py-2 border-2 border-pixel-yellow bg-pixel-yellow/10">
+                    <span className="font-pixel text-sm text-pixel-black">{modelId}</span>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedModels((prev) => prev.filter((item) => item !== modelId))}
+                      className="ml-auto px-2 py-0.5 bg-pixel-red border border-pixel-black font-pixel text-xs text-pixel-white"
+                    >
+                      删除
+                    </button>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-2 flex gap-2">
+                <input
+                  type="text"
+                  value={customModel}
+                  onChange={(e) => setCustomModel(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      addCustomModel();
+                    }
+                  }}
+                  placeholder="输入自定义模型 ID"
+                  className="flex-1 min-w-0 px-3 py-2 border-4 border-pixel-black font-mono text-sm bg-pixel-white"
+                />
+                <button
+                  type="button"
+                  onClick={addCustomModel}
+                  className="px-4 py-2 bg-pixel-blue border-4 border-pixel-black font-pixel text-sm text-pixel-white"
+                  style={{ boxShadow: '3px 3px 0 #101010' }}
+                >
+                  添加
+                </button>
               </div>
             </div>
 
@@ -248,8 +376,14 @@ export function ProviderListModal({ onClose }: ProviderListModalProps) {
   const [showAdd, setShowAdd] = useState(false);
   const [editProvider, setEditProvider] = useState<Provider | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [copyProvider, setCopyProvider] = useState<Provider | null>(null);
+  const [copyTargetTypes, setCopyTargetTypes] = useState<ProviderType[]>([]);
+  const [copying, setCopying] = useState(false);
+  const [copyError, setCopyError] = useState('');
 
-  useEffect(() => { fetchProviders(); }, []);
+  useEffect(() => {
+    fetchProviders();
+  }, []);
 
   const fetchProviders = async () => {
     setLoading(true);
@@ -257,11 +391,13 @@ export function ProviderListModal({ onClose }: ProviderListModalProps) {
       const res = await fetch(`${API_BASE}/api/providers`, {
         headers: { Authorization: `Bearer ${token}` },
       });
-      const data = await res.json();
-      setProviders(data.providers.map((p: any) => ({
-        ...p,
-        models: JSON.parse(p.models || '[]'),
-      })));
+      if (res.ok) {
+        const data = await res.json();
+        setProviders((data.providers || []).map((provider: any) => ({
+          ...provider,
+          models: parseModels(provider.models),
+        })));
+      }
     } finally {
       setLoading(false);
     }
@@ -275,42 +411,87 @@ export function ProviderListModal({ onClose }: ProviderListModalProps) {
         method: 'DELETE',
         headers: { Authorization: `Bearer ${token}` },
       });
-      setProviders(prev => prev.filter(p => p.id !== id));
+      setProviders((prev) => prev.filter((provider) => provider.id !== id));
     } finally {
       setDeletingId(null);
     }
   };
 
-  const typeIcons: Record<string, string> = {
-    claude: '🧠', openai: '🤖', gemini: '✨', openclaw: '🦞',
+  const openCopyForm = (provider: Provider) => {
+    setCopyProvider(provider);
+    setCopyTargetTypes([]);
+    setCopyError('');
   };
 
-  const typeLabels: Record<string, string> = {
-    claude: 'Claude', openai: 'OpenAI', gemini: 'Gemini', openclaw: 'OpenClaw',
+  const toggleCopyTarget = (targetType: ProviderType) => {
+    setCopyTargetTypes((prev) =>
+      prev.includes(targetType)
+        ? prev.filter((item) => item !== targetType)
+        : [...prev, targetType]
+    );
+  };
+
+  const handleCopyProvider = async () => {
+    if (!copyProvider) return;
+    if (copyTargetTypes.length === 0) {
+      setCopyError('请选择至少一个目标模型');
+      return;
+    }
+
+    setCopying(true);
+    setCopyError('');
+    try {
+      for (const targetType of copyTargetTypes) {
+        const body = buildCopiedProvider(copyProvider, targetType);
+        const res = await fetch(`${API_BASE}/api/providers`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify(body),
+        });
+        const data = await res.json().catch(() => null);
+        if (!res.ok) {
+          throw new Error(data?.message || `复制到 ${getProviderTypeLabel(targetType)} 失败`);
+        }
+      }
+      await fetchProviders();
+      setCopyProvider(null);
+      setCopyTargetTypes([]);
+    } catch (e) {
+      setCopyError(e instanceof Error ? e.message : '复制失败');
+    } finally {
+      setCopying(false);
+    }
   };
 
   return (
     <AnimatePresence>
       <motion.div
-        initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-        className="fixed inset-0 z-50 flex items-center justify-center bg-pixel-black/50"
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        className="fixed inset-0 z-50 flex items-center justify-center bg-pixel-black/50 p-4"
         onClick={onClose}
       >
         <motion.div
-          initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }}
-          className="bg-pixel-white border-8 border-pixel-black w-full max-w-lg mx-4 max-h-[90vh] overflow-y-auto"
+          initial={{ scale: 0.9, opacity: 0 }}
+          animate={{ scale: 1, opacity: 1 }}
+          exit={{ scale: 0.9, opacity: 0 }}
+          className="bg-pixel-white border-8 border-pixel-black w-full max-w-lg max-h-[90vh] overflow-y-auto"
           style={{ boxShadow: '8px 8px 0px 0px #101010' }}
-          onClick={e => e.stopPropagation()}
+          onClick={(e) => e.stopPropagation()}
         >
           <div className="bg-pixel-yellow border-b-4 border-pixel-black px-6 py-4 flex items-center justify-between">
-            <h2 className="font-pixel text-xl text-pixel-black flex items-center gap-2">
-              <span>🔑</span> 供应商配置
-            </h2>
+            <h2 className="font-pixel text-xl text-pixel-black">供应商配置</h2>
             <div className="flex items-center gap-2">
               <PixelButton variant="primary" size="sm" onClick={() => { setEditProvider(null); setShowAdd(true); }}>
                 + 新增
               </PixelButton>
-              <button onClick={onClose} className="font-pixel text-pixel-black hover:text-pixel-red text-2xl leading-none">×</button>
+              <button onClick={onClose} className="font-pixel text-pixel-black hover:text-pixel-red text-2xl leading-none">
+                x
+              </button>
             </div>
           </div>
 
@@ -320,48 +501,49 @@ export function ProviderListModal({ onClose }: ProviderListModalProps) {
             ) : providers.length === 0 ? (
               <div className="text-center py-8">
                 <p className="font-pixel text-pixel-black/50 mb-3">还没有配置供应商</p>
-                <PixelButton variant="primary" onClick={() => setShowAdd(true)}>+ 添加第一个供应商</PixelButton>
+                <PixelButton variant="primary" onClick={() => setShowAdd(true)}>添加第一个供应商</PixelButton>
               </div>
             ) : (
               <div className="space-y-3">
-                {['claude', 'openai', 'gemini', 'openclaw'].map(type => {
-                  const typeProviders = providers.filter(p => p.type === type);
+                {PROVIDER_TYPES.map((type) => {
+                  const typeProviders = providers.filter((provider) => provider.type === type.key);
                   if (typeProviders.length === 0) return null;
                   return (
-                    <div key={type}>
-                      <h3 className="font-pixel text-sm text-pixel-black/60 border-b-2 border-pixel-black/20 pb-1 mb-2 flex items-center gap-1">
-                        <span>{typeIcons[type]}</span> {typeLabels[type]}
+                    <div key={type.key}>
+                      <h3 className="font-pixel text-sm text-pixel-black/60 border-b-2 border-pixel-black/20 pb-1 mb-2 flex items-center gap-2">
+                        {getProviderTypeLabel(type.key)}
                       </h3>
                       <div className="space-y-2">
-                        {typeProviders.map(p => (
-                          <div key={p.id} className="border-4 border-pixel-black bg-pixel-white p-3 flex items-start gap-3" style={{ boxShadow: '3px 3px 0px 0px #101010' }}>
-                            <div className="flex-1 min-w-0">
-                              <div className="flex items-center gap-2">
-                                <span className="font-pixel text-sm font-bold">{p.name}</span>
-                                {p.isDefault && <span className="px-1.5 py-0.5 bg-pixel-green text-pixel-white font-pixel text-xs">默认</span>}
+                        {typeProviders.map((provider) => {
+                          const modelIds = normalizeProviderModels(provider.models);
+                          return (
+                            <div key={provider.id} className="border-4 border-pixel-black bg-pixel-white p-3 flex flex-col sm:flex-row sm:items-start gap-3" style={{ boxShadow: '3px 3px 0px 0px #101010' }}>
+                              <div className="flex-1 min-w-0">
+                                <div className="font-pixel text-sm font-bold">{provider.name}</div>
+                                <div className="font-mono text-xs text-pixel-black/50 mt-1 truncate">
+                                  {maskKey(provider.apiKey)}
+                                </div>
+                                <div className="flex flex-wrap gap-1 mt-2">
+                                  {modelIds.slice(0, 3).map((modelId) => (
+                                    <span key={modelId} className="px-2 py-0.5 bg-pixel-black/5 border border-pixel-black/20 font-mono text-xs">
+                                      {getModelDisplayName(modelId)}
+                                    </span>
+                                  ))}
+                                  {modelIds.length > 3 && (
+                                    <span className="px-2 py-0.5 bg-pixel-black/5 border border-pixel-black/20 font-mono text-xs">
+                                      +{modelIds.length - 3}
+                                    </span>
+                                  )}
+                                </div>
                               </div>
-                              <div className="font-mono text-xs text-pixel-black/50 mt-1 truncate">
-                                {p.apiKey.substring(0, 8)}...{p.apiKey.substring(p.apiKey.length - 4)}
-                              </div>
-                              <div className="flex flex-wrap gap-1 mt-2">
-                                {(Array.isArray(p.models) ? p.models : []).slice(0, 3).map((m: any) => (
-                                  <span key={m.id || m} className="px-2 py-0.5 bg-pixel-black/5 border border-pixel-black/20 font-mono text-xs">
-                                    {m.name || m}
-                                  </span>
-                                ))}
-                                {(Array.isArray(p.models) ? p.models : []).length > 3 && (
-                                  <span className="px-2 py-0.5 bg-pixel-black/5 border border-pixel-black/20 font-mono text-xs">
-                                    +{(Array.isArray(p.models) ? p.models : []).length - 3}
-                                  </span>
-                                )}
+                              <div className="flex flex-wrap gap-1 sm:justify-end">
+                                <button onClick={() => openCopyForm(provider)} className="px-2 py-1 bg-pixel-blue border-2 border-pixel-black font-pixel text-xs text-pixel-white" style={{ boxShadow: '2px 2px 0 #101010' }}>复制到其他模型</button>
+                                <button onClick={() => { setEditProvider(provider); setShowAdd(true); }} className="px-2 py-1 bg-pixel-yellow border-2 border-pixel-black font-pixel text-xs" style={{ boxShadow: '2px 2px 0 #101010' }}>编辑</button>
+                                <button onClick={() => handleDelete(provider.id)} disabled={deletingId === provider.id} className="px-2 py-1 bg-pixel-red border-2 border-pixel-black font-pixel text-xs text-pixel-white disabled:opacity-50" style={{ boxShadow: '2px 2px 0 #101010' }}>删除</button>
                               </div>
                             </div>
-                            <div className="flex gap-1">
-                              <button onClick={() => { setEditProvider(p); setShowAdd(true); }} className="px-2 py-1 bg-pixel-yellow border-2 border-pixel-black font-pixel text-xs hover:bg-pixel-yellow/80 transition-colors" style={{ boxShadow: '2px 2px 0 #101010' }}>编辑</button>
-                              <button onClick={() => handleDelete(p.id)} disabled={deletingId === p.id} className="px-2 py-1 bg-pixel-red border-2 border-pixel-black font-pixel text-xs text-pixel-white hover:bg-pixel-red/80 transition-colors disabled:opacity-50" style={{ boxShadow: '2px 2px 0 #101010' }}>删除</button>
-                            </div>
-                          </div>
-                        ))}
+                          );
+                        })}
                       </div>
                     </div>
                   );
@@ -372,10 +554,70 @@ export function ProviderListModal({ onClose }: ProviderListModalProps) {
         </motion.div>
       </motion.div>
 
+      {copyProvider && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-pixel-black/50 p-4"
+          onClick={() => setCopyProvider(null)}
+        >
+          <motion.div
+            initial={{ scale: 0.9, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            exit={{ scale: 0.9, opacity: 0 }}
+            className="bg-pixel-white border-8 border-pixel-black w-full max-w-lg"
+            style={{ boxShadow: '8px 8px 0px 0px #101010' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="bg-pixel-blue border-b-4 border-pixel-black px-6 py-4 flex items-center justify-between">
+              <h2 className="font-pixel text-lg text-pixel-white">复制到其他模型</h2>
+              <button onClick={() => setCopyProvider(null)} className="font-pixel text-pixel-white hover:text-pixel-yellow text-2xl leading-none">
+                x
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4">
+              <p className="font-pixel text-sm text-pixel-black/70">
+                将 {copyProvider.name} 的 API Key、Base URL 和模型配置复制到所选 Agent 类型。
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {PROVIDER_TYPES.filter((type) => type.key !== copyProvider.type).map((type) => (
+                  <label key={type.key} className="flex items-center gap-2 border-4 border-pixel-black/25 px-3 py-2 cursor-pointer hover:border-pixel-black">
+                    <input
+                      type="checkbox"
+                      checked={copyTargetTypes.includes(type.key)}
+                      onChange={() => toggleCopyTarget(type.key)}
+                      className="w-4 h-4"
+                    />
+                    <span className="font-pixel text-sm">{type.label}</span>
+                  </label>
+                ))}
+              </div>
+              {copyError && (
+                <div className="bg-pixel-red/20 border-4 border-pixel-red px-4 py-2 font-pixel text-sm text-pixel-red">
+                  {copyError}
+                </div>
+              )}
+            </div>
+
+            <div className="bg-pixel-white border-t-4 border-pixel-black px-6 py-4 flex gap-3 justify-end">
+              <PixelButton variant="secondary" onClick={() => setCopyProvider(null)}>取消</PixelButton>
+              <PixelButton variant="primary" onClick={handleCopyProvider} disabled={copying}>
+                {copying ? '复制中...' : '复制'}
+              </PixelButton>
+            </div>
+          </motion.div>
+        </motion.div>
+      )}
+
       {showAdd && (
         <ProviderModal
           editProvider={editProvider}
-          onClose={() => { setShowAdd(false); setEditProvider(null); }}
+          onClose={() => {
+            setShowAdd(false);
+            setEditProvider(null);
+          }}
           onSaved={fetchProviders}
         />
       )}

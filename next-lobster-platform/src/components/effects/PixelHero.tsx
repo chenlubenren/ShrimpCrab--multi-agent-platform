@@ -19,7 +19,12 @@ function NetworkGraph() {
   }, []);
 
   const edges = useMemo(() => {
-    const edgeList = [];
+    const edgeList: Array<{
+      from: number;
+      to: number;
+      delay: number;
+      color: string;
+    }> = [];
     for (let i = 0; i < nodes.length; i++) {
       const connections = 2 + Math.floor(Math.random() * 4);
       for (let j = 0; j < connections; j++) {
@@ -253,9 +258,10 @@ export function PixelHero({ onEnter }: PixelHeroProps) {
           <Image
             src="/claw_profile/03.png"
             alt="Lobster Mascot"
-            width={150}
-            height={150}
+            width={858}
+            height={643}
             className="mx-auto pixelated"
+            style={{ width: '150px', height: 'auto' }}
             unoptimized
           />
         </motion.div>

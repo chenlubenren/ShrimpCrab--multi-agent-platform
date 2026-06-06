@@ -36,6 +36,28 @@ function ensureColumns() {
       stmt.run(path.join(r.workspace_path, '.openclaw'), r.id);
     }
   }
+
+  if (!cols.includes('status')) {
+    sqliteDb.exec(`ALTER TABLE user_agent_instances ADD COLUMN status TEXT NOT NULL DEFAULT 'idle'`);
+  }
+
+  const conversationCols = sqliteDb
+    .prepare(`PRAGMA table_info(conversations)`)
+    .all()
+    .map((r: any) => r.name);
+
+  if (!conversationCols.includes('session_id')) {
+    sqliteDb.exec(`ALTER TABLE conversations ADD COLUMN session_id TEXT`);
+  }
+
+  const projectCols = sqliteDb
+    .prepare(`PRAGMA table_info(projects)`)
+    .all()
+    .map((r: any) => r.name);
+
+  if (projectCols.length > 0 && !projectCols.includes('git_commit')) {
+    sqliteDb.exec(`ALTER TABLE projects ADD COLUMN git_commit TEXT NOT NULL DEFAULT ''`);
+  }
 }
 
 export function getDb() {
@@ -142,6 +164,7 @@ export function getDb() {
         id TEXT PRIMARY KEY,
         user_id TEXT NOT NULL,
         agent_instance_id TEXT NOT NULL,
+        session_id TEXT,
         title TEXT NOT NULL DEFAULT '新对话',
         last_message TEXT NOT NULL DEFAULT '',
         message_count INTEGER NOT NULL DEFAULT 0,
@@ -225,6 +248,28 @@ export function getDb() {
         FOREIGN KEY (agent_instance_id) REFERENCES user_agent_instances(id)
       );
 
+      -- Projects
+      CREATE TABLE IF NOT EXISTS projects (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        description TEXT NOT NULL DEFAULT '',
+        notes TEXT NOT NULL DEFAULT '',
+        icon TEXT NOT NULL DEFAULT '/project-icons/folder-blue.svg',
+        workspace_path TEXT NOT NULL,
+        team_ids TEXT NOT NULL DEFAULT '[]',
+        gantt_enabled INTEGER NOT NULL DEFAULT 0,
+        gantt_plan TEXT NOT NULL DEFAULT '[]',
+        git_remote TEXT NOT NULL DEFAULT '',
+        git_branch TEXT NOT NULL DEFAULT 'main',
+        git_commit TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'active',
+        last_opened_at INTEGER,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        FOREIGN KEY (user_id) REFERENCES users(id)
+      );
+
       -- Social Posts (Agent朋友圈/论坛)
       CREATE TABLE IF NOT EXISTS social_posts (
         id TEXT PRIMARY KEY,
@@ -297,6 +342,8 @@ export function getDb() {
       CREATE INDEX IF NOT EXISTS idx_team_members_team ON team_members(team_id);
       CREATE INDEX IF NOT EXISTS idx_team_runs_team ON team_runs(team_id);
       CREATE INDEX IF NOT EXISTS idx_team_runs_user ON team_runs(user_id);
+      CREATE INDEX IF NOT EXISTS idx_projects_user ON projects(user_id);
+      CREATE INDEX IF NOT EXISTS idx_projects_recent ON projects(user_id, last_opened_at, updated_at);
       CREATE INDEX IF NOT EXISTS idx_social_posts_author ON social_posts(author_id, created_at);
       CREATE INDEX IF NOT EXISTS idx_social_posts_parent ON social_posts(parent_post_id);
       CREATE INDEX IF NOT EXISTS idx_social_comments_post ON social_comments(post_id);

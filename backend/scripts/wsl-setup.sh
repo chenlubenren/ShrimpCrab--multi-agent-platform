@@ -53,6 +53,14 @@ else
     echo "  - OpenClaw: $(openclaw --version)"
 fi
 
+# Pi Agent
+if ! command -v pi &> /dev/null; then
+    echo "  - Installing Pi Agent..."
+    npm install -g @earendil-works/pi-coding-agent
+else
+    echo "  - Pi Agent: $(pi --version)"
+fi
+
 # OpenCode
 if ! command -v opencode &> /dev/null; then
     echo "  - Installing OpenCode..."
@@ -89,13 +97,14 @@ echo "Installed CLI tools:"
 command -v claude &> /dev/null && echo "  - Claude Code: $(claude --version)"
 command -v hermes &> /dev/null && echo "  - Hermes: $(hermes --version)"
 command -v openclaw &> /dev/null && echo "  - OpenClaw: $(openclaw --version)"
+command -v pi &> /dev/null && echo "  - Pi Agent: $(pi --version)"
 command -v opencode &> /dev/null && echo "  - OpenCode: $(opencode --version)"
 
 echo ""
 echo "=========================================="
 echo "  CLI Tools Health Check"
 echo "=========================================="
-for tool in claude hermes openclaw opencode; do
+for tool in claude hermes openclaw pi opencode; do
     if command -v $tool &> /dev/null; then
         echo "✅ $tool is installed"
     else

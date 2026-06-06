@@ -2,12 +2,17 @@ import type { CSSProperties } from 'react';
 import { Lobster } from '@/types';
 import { motion } from 'framer-motion';
 import { useStore } from '@/store/useStore';
+import { hasConfiguredProvider } from '@/lib/agentProvider';
 
 interface LobsterSpriteProps {
   lobster: Lobster;
   size?: 'sm' | 'md' | 'lg';
   showStatus?: boolean;
+  showProviderStatus?: boolean;
+  providerConfigured?: boolean;
   silhouette?: boolean;
+  muted?: boolean;
+  animateStatus?: boolean;
 }
 
 /** 与 db.json id 一一对应：主控粉、研究绿、数据蓝、写作橙
@@ -71,9 +76,21 @@ const imgStyle: CSSProperties = {
   pointerEvents: 'none' as const,
 };
 
-export function LobsterSprite({ lobster, size = 'md', showStatus = true, silhouette = false }: LobsterSpriteProps) {
+export function LobsterSprite({
+  lobster,
+  size = 'md',
+  showStatus = false,
+  showProviderStatus = false,
+  providerConfigured,
+  silhouette = false,
+  muted = false,
+  animateStatus,
+}: LobsterSpriteProps) {
   const { activeLobsterId, setActiveLobster } = useStore();
   const isActive = activeLobsterId === lobster.id;
+  const shouldAnimateStatus = showProviderStatus ? false : (animateStatus ?? showStatus);
+  const isProviderConfigured = providerConfigured ?? hasConfiguredProvider(lobster);
+  const shouldMute = muted || (showProviderStatus && !isProviderConfigured);
 
   const statusAnimations: Record<string, { y?: number[]; rotate?: number[]; scale?: number[]; opacity?: number[]; transition?: { duration: number; repeat: number } }> = {
     idle: { y: [0, -2, 0], transition: { duration: 2.5, repeat: Infinity } },
@@ -86,18 +103,20 @@ export function LobsterSprite({ lobster, size = 'md', showStatus = true, silhoue
   const displayPx = DISPLAY_PX[size];
 
   const statusColors: Record<string, string> = { idle: 'bg-pixel-green', working: 'bg-pixel-yellow', busy: 'bg-pixel-red', error: 'bg-pixel-black', offline: 'bg-pixel-gray' };
-  const statusLabels: Record<string, string> = { idle: 'IDLE', working: 'WORKING', busy: 'BUSY', error: 'ERROR', offline: 'OFF' };
+  const restingAnimation = { y: 0, rotate: 0, scale: 1, opacity: 1 };
 
   const imageSrc = lobster.avatar ?? spriteSrc(lobster.id);
 
   const spriteStyle: CSSProperties = silhouette
     ? { ...imgStyle, filter: 'brightness(0) opacity(0.25)', mixBlendMode: 'multiply' }
+    : shouldMute
+      ? { ...imgStyle, filter: 'grayscale(1) opacity(0.45)' }
     : imgStyle;
 
   return (
     <motion.div
       className={`relative inline-flex ${isActive ? 'ring-4 ring-pixel-yellow' : ''}`}
-      animate={statusAnimations[lobster.status]}
+      animate={shouldAnimateStatus && !shouldMute ? statusAnimations[lobster.status] : restingAnimation}
       onClick={() => setActiveLobster(isActive ? null : lobster.id)}
     >
       <div style={frameStyle(displayPx)}>
@@ -105,19 +124,21 @@ export function LobsterSprite({ lobster, size = 'md', showStatus = true, silhoue
         <img src={imageSrc} alt={lobster.name} style={spriteStyle} draggable={false} />
       </div>
 
-      {showStatus && !silhouette && (
-        <div className="absolute -top-1.5 -right-1.5 z-10">
-          <div
-            className={`
-            ${statusColors[lobster.status]}
-            text-pixel-white px-1.5 py-0.5
-            border-2 border-pixel-black
-            rounded-full font-pixel text-xs
-          `}
-          >
-            {statusLabels[lobster.status]}
-          </div>
-        </div>
+      {showProviderStatus && !silhouette && (
+        <span
+          aria-label={isProviderConfigured ? '已配置供应商' : '未配置供应商'}
+          title={isProviderConfigured ? '已配置供应商' : '未配置供应商'}
+          className={`absolute -right-1 -top-1 z-10 h-3.5 w-3.5 rounded-full border-2 border-pixel-black ${
+            isProviderConfigured ? 'bg-pixel-green' : 'bg-pixel-gray'
+          }`}
+        />
+      )}
+
+      {showStatus && !showProviderStatus && !silhouette && !shouldMute && (
+        <span
+          aria-label={`agent status: ${lobster.status}`}
+          className={`absolute -right-1 -top-1 z-10 h-3.5 w-3.5 rounded-full border-2 border-pixel-black ${statusColors[lobster.status]}`}
+        />
       )}
     </motion.div>
   );

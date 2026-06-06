@@ -25,6 +25,7 @@ interface Provider {
 
 interface AgentUserConfig {
   name: string;
+  description: string;
   platform: string;
   avatar?: string;
   providerId?: string;
@@ -54,6 +55,7 @@ export function AgentConfigModal({ agent, onClose, onSave }: AgentConfigModalPro
   const router = useRouter();
   const [config, setConfig] = useState<AgentUserConfig>({
     name: agent.name || '',
+    description: agent.description || '',
     platform: agent.platform || 'openclaw',
     avatar: agent.avatar || '',
     providerId: (agent as any).providerId || '',
@@ -67,6 +69,7 @@ export function AgentConfigModal({ agent, onClose, onSave }: AgentConfigModalPro
   const [error, setError] = useState('');
   const [avatarPreview, setAvatarPreview] = useState(agent.avatar || '');
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const canEditProfile = agent.canEditProfile !== false;
 
   useEffect(() => {
     fetchProviders();
@@ -103,13 +106,14 @@ export function AgentConfigModal({ agent, onClose, onSave }: AgentConfigModalPro
     setSaving(true);
     setError('');
     try {
+      const payload = canEditProfile ? config : { ...config, name: undefined, description: undefined };
       const res = await fetch(`${API_BASE}/api/agents/${agent.id}/config`, {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify(config),
+        body: JSON.stringify(payload),
       });
       if (!res.ok) throw new Error('保存失败');
       onSave();
@@ -212,8 +216,25 @@ export function AgentConfigModal({ agent, onClose, onSave }: AgentConfigModalPro
                   type="text"
                   value={config.name}
                   onChange={(e) => setConfig({ ...config, name: e.target.value })}
-                  className="w-full px-4 py-2 border-4 border-pixel-black font-pixel bg-pixel-white"
+                  disabled={!canEditProfile}
+                  className="w-full px-4 py-2 border-4 border-pixel-black font-pixel bg-pixel-white disabled:cursor-not-allowed disabled:opacity-60"
                   placeholder="输入 Agent 名称"
+                />
+                {!canEditProfile && (
+                  <p className="mt-2 font-pixel text-xs text-pixel-black/50">
+                    从市场下载的他人 Agent 不能修改名称和介绍。
+                  </p>
+                )}
+              </div>
+              <div>
+                <label className="font-pixel text-xs text-pixel-black/60 mb-1 block">Agent 介绍</label>
+                <textarea
+                  value={config.description}
+                  onChange={(e) => setConfig({ ...config, description: e.target.value })}
+                  disabled={!canEditProfile}
+                  rows={4}
+                  className="w-full resize-none px-4 py-2 border-4 border-pixel-black font-pixel bg-pixel-white disabled:cursor-not-allowed disabled:opacity-60"
+                  placeholder="写一句清楚的介绍，让用户知道这个 Agent 擅长什么。"
                 />
               </div>
               <div>

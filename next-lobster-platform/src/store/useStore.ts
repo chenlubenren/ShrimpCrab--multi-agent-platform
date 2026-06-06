@@ -1,14 +1,45 @@
 import { create } from 'zustand';
-import { Lobster, Cave, ArchitectureAgent, OpenClawConfig } from '@/types';
+import { persist } from 'zustand/middleware';
+import {
+  Lobster,
+  Cave,
+  Architecture,
+  ArchitectureAgent,
+  Project,
+  ProjectInput,
+  OpenClawConfig,
+  Session,
+  SessionMessage,
+  WhiteboardColumn,
+  WhiteboardConnection,
+  WhiteboardNote,
+} from '@/types';
 import * as api from '@/lib/api';
 import { useAuthStore } from './useAuthStore';
 
 interface LobsterStore {
   lobsters: Lobster[];
   caves: Cave[];
+  architectures: Architecture[];
+  projects: Project[];
   messages: any[];
-  sessions: any[];
-  sessionMessages: any[];
+  sessions: Session[];
+  sessionMessages: SessionMessage[];
+  whiteboards: Record<string, WhiteboardNote[]>;
+  whiteboardConnections: Record<string, WhiteboardConnection[]>;
+  addSessionMessage: (message: SessionMessage) => void;
+  createSession: (name: string, memberIds: string[]) => string;
+  renameSession: (sessionId: string, name: string) => void;
+  deleteSession: (sessionId: string) => void;
+  addMemberToSession: (sessionId: string, lobsterId: string) => void;
+  removeMemberFromSession: (sessionId: string, lobsterId: string) => void;
+  addWhiteboardNote: (note: WhiteboardNote) => void;
+  clearWhiteboard: (sessionId: string) => void;
+  updateWhiteboardNote: (sessionId: string, noteId: string, updates: { text?: string; column?: WhiteboardColumn }) => void;
+  moveWhiteboardNote: (sessionId: string, noteId: string, x: number, y: number) => void;
+  deleteWhiteboardNote: (sessionId: string, noteId: string) => void;
+  addWhiteboardConnection: (connection: WhiteboardConnection) => void;
+  deleteWhiteboardConnection: (sessionId: string, connectionId: string) => void;
   activeLobsterId: string | null;
   activeArchitectureId: string | null;
   currentTask: string | null;
@@ -23,6 +54,7 @@ interface LobsterStore {
   // Data fetching
   fetchCaves: () => Promise<void>;
   fetchAgents: (caveId?: string) => Promise<void>;
+  fetchProjects: () => Promise<void>;
 
   // Cave actions
   addCave: (cave: Cave) => void;
@@ -44,6 +76,16 @@ interface LobsterStore {
 
   // Architecture actions
   updateAgentStatus: (archId: string, agentId: string, status: ArchitectureAgent['status']) => void;
+  addArchitecture: (architecture: Architecture) => void;
+  updateAgentLink: (archId: string, agentId: string, lobsterId: string | null) => void;
+  setActiveAgent: (id: string | null) => void;
+  setCurrentTask: (task: string | null) => void;
+
+  // Project actions
+  createProjectAPI: (data: ProjectInput) => Promise<Project>;
+  updateProjectAPI: (projectId: string, data: Partial<ProjectInput>) => Promise<Project>;
+  openProjectAPI: (projectId: string) => Promise<Project>;
+  deleteProjectAPI: (projectId: string) => Promise<void>;
 
   // OpenClaw actions
   setOpenclawConfigs: (configs: OpenClawConfig[]) => void;
@@ -76,6 +118,20 @@ function agentToLobster(agent: any): Lobster {
     caveId: agent.caveId || undefined,
     createdAt: agent.createdAt,
     updatedAt: agent.updatedAt,
+    sourceMarketAgentId: agent.sourceMarketAgentId || null,
+    canEditProfile: agent.canEditProfile !== false,
+    platform: agent.platform || agent.config?.platform || undefined,
+    providerId: agent.providerId || agent.config?.providerId || null,
+    config: agent.config,
+    ownerUsername:
+      agent.ownerUsername ||
+      agent.uploaderUsername ||
+      agent.username ||
+      agent.owner?.username ||
+      '当前用户',
+    uploaderUsername: agent.uploaderUsername || agent.ownerUsername,
+    isPublishedToMarket: Boolean(agent.isPublishedToMarket || agent.marketAgentId),
+    marketAgentId: agent.marketAgentId || null,
   };
 }
 
@@ -91,9 +147,13 @@ function agentCaveToCave(cave: any): Cave {
   };
 }
 
-export const useStore = create<LobsterStore>((set, get) => ({
+export const useStore = create<LobsterStore>()(
+  persist(
+    (set, get) => ({
   lobsters: [],
   caves: [],
+  architectures: [],
+  projects: [],
   messages: [],
   activeLobsterId: null,
   activeArchitectureId: null,
@@ -104,6 +164,181 @@ export const useStore = create<LobsterStore>((set, get) => ({
   isInitialized: false,
   sessions: [],
   sessionMessages: [],
+  whiteboards: {},
+  whiteboardConnections: {},
+  addSessionMessage: (message) => set((state) => ({
+    sessionMessages: [...state.sessionMessages, message].slice(-500),
+    sessions: state.sessions.map((session) =>
+      session.id === message.sessionId
+        ? { ...session, updatedAt: message.timestamp }
+        : session
+    ),
+  })),
+  createSession: (name, memberIds) => {
+    const now = new Date().toISOString();
+    const session: Session = {
+      id: `session-${Date.now()}`,
+      name,
+      memberIds,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    set((state) => ({
+      sessions: [session, ...state.sessions],
+    }));
+
+    return session.id;
+  },
+  renameSession: (sessionId, name) => set((state) => ({
+    sessions: state.sessions.map((session) =>
+      session.id === sessionId
+        ? { ...session, name, updatedAt: new Date().toISOString() }
+        : session
+    ),
+  })),
+  deleteSession: (sessionId) => set((state) => ({
+    sessions: state.sessions.filter((session) => session.id !== sessionId),
+    sessionMessages: state.sessionMessages.filter((message) => message.sessionId !== sessionId),
+    whiteboards: Object.fromEntries(
+      Object.entries(state.whiteboards).filter(([id]) => id !== sessionId)
+    ),
+    whiteboardConnections: Object.fromEntries(
+      Object.entries(state.whiteboardConnections).filter(([id]) => id !== sessionId)
+    ),
+  })),
+  addMemberToSession: (sessionId, lobsterId) => set((state) => ({
+    sessions: state.sessions.map((session) =>
+      session.id === sessionId
+        ? {
+            ...session,
+            memberIds: session.memberIds.includes(lobsterId)
+              ? session.memberIds
+              : [...session.memberIds, lobsterId],
+            updatedAt: new Date().toISOString(),
+          }
+        : session
+    ),
+  })),
+  removeMemberFromSession: (sessionId, lobsterId) => set((state) => ({
+    sessions: state.sessions.map((session) =>
+      session.id === sessionId
+        ? {
+            ...session,
+            memberIds: session.memberIds.filter((id) => id !== lobsterId),
+            updatedAt: new Date().toISOString(),
+          }
+        : session
+    ),
+  })),
+  addWhiteboardNote: (note) => set((state) => {
+    const currentNotes = state.whiteboards[note.sessionId] || [];
+    const nextNote = {
+      ...note,
+      x: Number.isFinite(note.x) ? note.x : 16,
+      y: Number.isFinite(note.y) ? note.y : 16,
+      updatedAt: note.updatedAt || note.createdAt,
+    };
+
+    return {
+      whiteboards: {
+        ...state.whiteboards,
+        [note.sessionId]: [...currentNotes, nextNote].slice(-40),
+      },
+    };
+  }),
+  clearWhiteboard: (sessionId) => set((state) => ({
+    whiteboards: {
+      ...state.whiteboards,
+      [sessionId]: [],
+    },
+    whiteboardConnections: {
+      ...state.whiteboardConnections,
+      [sessionId]: [],
+    },
+  })),
+  updateWhiteboardNote: (sessionId, noteId, updates) => set((state) => {
+    const currentNotes = state.whiteboards[sessionId] || [];
+    const targetNote = currentNotes.find((note) => note.id === noteId);
+    if (!targetNote) {
+      return {};
+    }
+
+    const updatedNote = {
+      ...targetNote,
+      ...updates,
+      updatedAt: new Date().toISOString(),
+    };
+
+    return {
+      whiteboards: {
+        ...state.whiteboards,
+        [sessionId]: updatedNote.text.trim()
+          ? currentNotes.map((note) => (note.id === noteId ? updatedNote : note))
+          : currentNotes.filter((note) => note.id !== noteId),
+      },
+      whiteboardConnections: updatedNote.text.trim()
+        ? state.whiteboardConnections
+        : {
+            ...state.whiteboardConnections,
+            [sessionId]: (state.whiteboardConnections[sessionId] || []).filter(
+              (connection) => connection.fromNoteId !== noteId && connection.toNoteId !== noteId
+            ),
+          },
+    };
+  }),
+  moveWhiteboardNote: (sessionId, noteId, x, y) => set((state) => ({
+    whiteboards: {
+      ...state.whiteboards,
+      [sessionId]: (state.whiteboards[sessionId] || []).map((note) =>
+        note.id === noteId
+          ? {
+              ...note,
+              x,
+              y,
+              updatedAt: new Date().toISOString(),
+            }
+          : note
+      ),
+    },
+  })),
+  deleteWhiteboardNote: (sessionId, noteId) => set((state) => ({
+    whiteboards: {
+      ...state.whiteboards,
+      [sessionId]: (state.whiteboards[sessionId] || []).filter((note) => note.id !== noteId),
+    },
+    whiteboardConnections: {
+      ...state.whiteboardConnections,
+      [sessionId]: (state.whiteboardConnections[sessionId] || []).filter(
+        (connection) => connection.fromNoteId !== noteId && connection.toNoteId !== noteId
+      ),
+    },
+  })),
+  addWhiteboardConnection: (connection) => set((state) => {
+    if (connection.fromNoteId === connection.toNoteId) return {};
+    const currentConnections = state.whiteboardConnections[connection.sessionId] || [];
+    const exists = currentConnections.some(
+      (item) =>
+        (item.fromNoteId === connection.fromNoteId && item.toNoteId === connection.toNoteId) ||
+        (item.fromNoteId === connection.toNoteId && item.toNoteId === connection.fromNoteId)
+    );
+    if (exists) return {};
+
+    return {
+      whiteboardConnections: {
+        ...state.whiteboardConnections,
+        [connection.sessionId]: [...currentConnections, connection],
+      },
+    };
+  }),
+  deleteWhiteboardConnection: (sessionId, connectionId) => set((state) => ({
+    whiteboardConnections: {
+      ...state.whiteboardConnections,
+      [sessionId]: (state.whiteboardConnections[sessionId] || []).filter(
+        (connection) => connection.id !== connectionId
+      ),
+    },
+  })),
 
   openclawConfigs: [
     {
@@ -142,6 +377,16 @@ export const useStore = create<LobsterStore>((set, get) => ({
     }
   },
 
+  fetchProjects: async () => {
+    try {
+      const projects = await api.fetchProjects();
+      set({ projects });
+    } catch (error) {
+      console.error('Failed to fetch projects:', error);
+      set({ projects: [] });
+    }
+  },
+
   // Cave actions
   addCave: (cave) => set((state) => ({ caves: [...state.caves, cave] })),
   removeCave: (id) => set((state) => ({ caves: state.caves.filter(c => c.id !== id) })),
@@ -156,7 +401,7 @@ export const useStore = create<LobsterStore>((set, get) => ({
   },
 
   deleteCaveAPI: async (id) => {
-    // Delete cave API call would go here
+    await api.deleteCave(id);
     get().removeCave(id);
   },
 
@@ -167,6 +412,8 @@ export const useStore = create<LobsterStore>((set, get) => ({
     lobsters: state.lobsters.map(l => l.id === id ? { ...l, status } : l)
   })),
   setActiveLobster: (id) => set({ activeLobsterId: id }),
+  setActiveAgent: (id) => set({ activeAgentId: id }),
+  setCurrentTask: (task) => set({ currentTask: task }),
   addConversation: (lobsterId, conversation) => set((state) => ({
     lobsters: state.lobsters.map(l => {
       if (l.id === lobsterId) {
@@ -210,8 +457,63 @@ export const useStore = create<LobsterStore>((set, get) => ({
   },
 
   // Architecture actions
-  updateAgentStatus: (archId, agentId, status) => {
-    // Not implemented in this version
+  addArchitecture: (architecture) => set((state) => ({
+    architectures: [architecture, ...state.architectures],
+  })),
+  updateAgentStatus: (archId, agentId, status) => set((state) => ({
+    architectures: state.architectures.map((architecture) =>
+      architecture.id === archId
+        ? {
+            ...architecture,
+            agents: architecture.agents.map((agent) =>
+              agent.id === agentId ? { ...agent, status } : agent
+            ),
+          }
+        : architecture
+    ),
+  })),
+  updateAgentLink: (archId, agentId, lobsterId) => set((state) => ({
+    architectures: state.architectures.map((architecture) =>
+      architecture.id === archId
+        ? {
+            ...architecture,
+            agents: architecture.agents.map((agent) =>
+              agent.id === agentId
+                ? { ...agent, linkedLobsterId: lobsterId ?? undefined }
+                : agent
+            ),
+          }
+        : architecture
+    ),
+  })),
+
+  createProjectAPI: async (data) => {
+    const project = await api.createProject(data);
+    set((state) => ({ projects: [project, ...state.projects] }));
+    return project;
+  },
+
+  updateProjectAPI: async (projectId, data) => {
+    const project = await api.updateProject(projectId, data);
+    set((state) => ({
+      projects: state.projects.map((item) => (item.id === projectId ? project : item)),
+    }));
+    return project;
+  },
+
+  openProjectAPI: async (projectId) => {
+    const project = await api.openProject(projectId);
+    set((state) => ({
+      projects: [project, ...state.projects.filter((item) => item.id !== projectId)],
+    }));
+    return project;
+  },
+
+  deleteProjectAPI: async (projectId) => {
+    await api.deleteProject(projectId);
+    set((state) => ({
+      projects: state.projects.filter((item) => item.id !== projectId),
+    }));
   },
 
   // OpenClaw actions
@@ -234,6 +536,7 @@ export const useStore = create<LobsterStore>((set, get) => ({
       await Promise.all([
         get().fetchCaves(),
         get().fetchAgents(),
+        get().fetchProjects(),
       ]);
       set({ isInitialized: true });
     } catch (error) {
@@ -241,4 +544,15 @@ export const useStore = create<LobsterStore>((set, get) => ({
       set({ isInitialized: true });
     }
   },
-}));
+    }),
+    {
+      name: 'lobster-workspace-state',
+      partialize: (state) => ({
+        sessions: state.sessions,
+        sessionMessages: state.sessionMessages,
+        whiteboards: state.whiteboards,
+        whiteboardConnections: state.whiteboardConnections,
+      }),
+    }
+  )
+);

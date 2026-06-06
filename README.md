@@ -295,7 +295,7 @@ Connect with the local OpenClaw Gateway (port 18789) for real AI agent communica
 | Node Editor    | @xyflow/react 12             | ReactFlow for architecture graphs    |
 | Markdown       | react-markdown + remark-gfm | Rich text rendering                   |
 | Fonts          | VT323, ZCOOL KuaiLe         | Pixel art typography                 |
-| Mock API       | json-server                  | REST API simulation                  |
+| Backend        | Express + SQLite             | Real API, workspace, and agent runtime services |
 
 ---
 
@@ -303,11 +303,6 @@ Connect with the local OpenClaw Gateway (port 18789) for real AI agent communica
 
 ```
 openclaw_company_source_code/
-├── mock-api/                        # Mock API Server
-│   ├── db.json                      # Mock database (lobsters, architectures)
-│   ├── routes.json                  # API route mappings
-│   └── package.json                 # Dependencies: json-server
-│
 ├── next-lobster-platform/           # Next.js Frontend
 │   ├── src/
 │   │   ├── app/                    # Page routes
@@ -392,17 +387,17 @@ box-shadow: 6px 6px 0px 0px #101010;
 cd next-lobster-platform
 npm install
 
-# Mock API (optional)
-cd mock-api
+# Backend
+cd ../backend
 npm install
 ```
 
-### 2. Start Mock API Server (Optional)
+### 2. Start Backend
 
 ```bash
-cd mock-api
-npm start
-# Server runs at http://localhost:3001
+cd backend
+npm run dev
+# API runs at http://localhost:3002
 ```
 
 ### 3. Start Frontend
@@ -422,7 +417,7 @@ npm run dev
 | `src/store/useStore.ts` | Zustand store - all application state |
 | `src/types/index.ts` | TypeScript interfaces for Lobster, Architecture, Agent |
 | `src/lib/openclaw.ts` | OpenClaw Gateway API client |
-| `src/lib/api.ts` | REST API client with mock fallback |
+| `src/lib/api.ts` | REST API client for the backend services |
 | `src/lib/archTemplates.ts` | Pre-defined architecture templates |
 | `src/components/architecture/NodeFlowPreview.tsx` | ReactFlow graph visualization |
 | `src/components/lobster/LobsterSprite.tsx` | Animated lobster sprite renderer |

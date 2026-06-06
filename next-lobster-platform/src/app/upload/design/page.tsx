@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { Suspense, useState, useCallback } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { motion } from 'framer-motion';
 import {
@@ -19,6 +19,14 @@ import { SKILL_OPTIONS, buildDescription } from '@/lib/skillOptions';
 const OUTPUT_SIZES = [48, 64, 96, 128];
 
 export default function DesignPage() {
+  return (
+    <Suspense fallback={<div className="p-8 text-center font-pixel text-pixel-black/50">加载中...</div>}>
+      <DesignPageInner />
+    </Suspense>
+  );
+}
+
+function DesignPageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { addLobster } = useStore();

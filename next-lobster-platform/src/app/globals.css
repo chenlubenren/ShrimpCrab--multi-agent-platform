@@ -128,3 +128,334 @@ footer {
 footer p {
   color: #F8F8F8 !important;
 }
+
+@media (max-width: 767px) {
+  body {
+    font-size: 16px;
+    line-height: 1.35;
+    background-color: #F8F8F8;
+  }
+
+  body::before {
+    background-color: #F8F8F8;
+    background-image:
+      linear-gradient(rgba(16, 16, 16, 0.035) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(16, 16, 16, 0.035) 1px, transparent 1px);
+    background-size: 18px 18px;
+  }
+
+  .font-pixel {
+    letter-spacing: 0;
+  }
+
+  .text-xs { font-size: 12px !important; }
+  .text-\[9px\] { font-size: 11px !important; }
+  .text-\[10px\] { font-size: 12px !important; }
+  .text-\[11px\] { font-size: 12px !important; }
+  .text-\[12px\] { font-size: 13px !important; }
+  .text-\[13px\] { font-size: 13px !important; }
+  .text-sm { font-size: 14px !important; }
+  .text-base { font-size: 15px !important; }
+  .text-lg { font-size: 16px !important; }
+  .text-xl { font-size: 18px !important; }
+  .text-2xl { font-size: 22px !important; }
+  .text-3xl { font-size: 26px !important; }
+  .text-4xl { font-size: 32px !important; }
+
+  button,
+  a,
+  input,
+  textarea,
+  select {
+    -webkit-tap-highlight-color: rgba(212, 165, 51, 0.35);
+  }
+
+  input,
+  textarea,
+  select {
+    min-height: 44px;
+    font-size: 15px;
+  }
+
+  button {
+    min-height: 44px;
+  }
+
+  .rpg-dialog button,
+  .rpg-dialog input,
+  .rpg-dialog textarea,
+  .rpg-dialog select {
+    font-size: 18px;
+  }
+
+  .rpg-dialog textarea {
+    line-height: 1.45;
+  }
+
+  [data-mobile-app-nav="true"] {
+    min-height: 76px;
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 40;
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    border-top: 4px solid #101010;
+    background: #F8F8F8;
+    box-shadow: 0 -4px 0 0 #101010;
+  }
+
+  [data-mobile-app-nav="true"] a {
+    position: relative;
+    display: flex;
+    min-height: 76px;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    padding: 8px 0 6px;
+    border-right: 2px solid rgba(16, 16, 16, 0.1);
+    font-size: 0.72rem;
+    line-height: 1;
+    text-align: center;
+  }
+
+  [data-mobile-app-nav="true"] a:last-child {
+    border-right: 0;
+  }
+
+  [data-mobile-nav-icon="true"] {
+    display: flex;
+    width: 32px;
+    height: 32px;
+    align-items: center;
+    justify-content: center;
+  }
+
+  [data-mobile-nav-label="true"] {
+    max-width: 100%;
+    white-space: nowrap;
+    letter-spacing: 0;
+  }
+
+  html[data-mobile-display-mode="care"] body {
+    font-size: 24px;
+  }
+
+  html[data-mobile-display-mode="care"] .text-xs { font-size: 18px !important; }
+  html[data-mobile-display-mode="care"] .text-\[9px\] { font-size: 15px !important; }
+  html[data-mobile-display-mode="care"] .text-\[10px\] { font-size: 16px !important; }
+  html[data-mobile-display-mode="care"] .text-\[11px\] { font-size: 17px !important; }
+  html[data-mobile-display-mode="care"] .text-\[12px\] { font-size: 18px !important; }
+  html[data-mobile-display-mode="care"] .text-\[13px\] { font-size: 18px !important; }
+  html[data-mobile-display-mode="care"] .text-sm { font-size: 20px !important; }
+  html[data-mobile-display-mode="care"] .text-base { font-size: 22px !important; }
+  html[data-mobile-display-mode="care"] .text-lg { font-size: 24px !important; }
+  html[data-mobile-display-mode="care"] .text-xl { font-size: 28px !important; }
+  html[data-mobile-display-mode="care"] .text-2xl { font-size: 34px !important; }
+  html[data-mobile-display-mode="care"] .text-3xl { font-size: 40px !important; }
+  html[data-mobile-display-mode="care"] .text-4xl { font-size: 48px !important; }
+
+  html[data-mobile-display-mode="care"] input,
+  html[data-mobile-display-mode="care"] textarea,
+  html[data-mobile-display-mode="care"] select {
+    min-height: 52px;
+    font-size: 20px;
+  }
+
+  html[data-mobile-display-mode="care"] [data-mobile-app-nav="true"] {
+    min-height: 128px;
+  }
+
+  html[data-mobile-display-mode="care"] [data-app-main="true"] {
+    padding-bottom: 12rem;
+  }
+
+  html[data-mobile-display-mode="care"] [data-mobile-app-nav="true"] a {
+    min-height: 128px;
+    gap: 8px;
+    padding: 20px 0 12px;
+    font-size: 1.32rem;
+  }
+
+  html[data-mobile-display-mode="care"] [data-mobile-nav-icon="true"] {
+    width: clamp(58px, 15vw, 74px);
+    height: clamp(58px, 15vw, 74px);
+  }
+
+  [data-mobile-projects-page="true"] {
+    padding-bottom: 7rem;
+  }
+
+  [data-mobile-projects-page="true"] h1 {
+    font-size: 1.75rem !important;
+    line-height: 1 !important;
+  }
+
+  [data-mobile-projects-page="true"] p,
+  [data-mobile-projects-page="true"] label {
+    line-height: 1.2 !important;
+  }
+
+  [data-mobile-projects-page="true"] .text-\[3rem\],
+  [data-mobile-projects-page="true"] .text-\[2rem\],
+  [data-mobile-projects-page="true"] .text-\[1\.8rem\],
+  [data-mobile-projects-page="true"] .text-\[1\.65rem\],
+  [data-mobile-projects-page="true"] .text-\[1\.45rem\],
+  [data-mobile-projects-page="true"] .text-\[1\.35rem\],
+  [data-mobile-projects-page="true"] .text-\[1\.25rem\],
+  [data-mobile-projects-page="true"] .text-\[1\.2rem\],
+  [data-mobile-projects-page="true"] .text-\[1\.15rem\],
+  [data-mobile-projects-page="true"] .text-\[1\.1rem\],
+  [data-mobile-projects-page="true"] .text-\[1\.05rem\] {
+    font-size: 0.94rem !important;
+  }
+
+  [data-mobile-projects-page="true"] .text-\[3rem\] {
+    font-size: 1.75rem !important;
+  }
+
+  [data-mobile-projects-page="true"] .text-\[2rem\],
+  [data-mobile-projects-page="true"] .text-\[1\.8rem\] {
+    font-size: 1.15rem !important;
+  }
+
+  [data-mobile-projects-page="true"] .text-\[1\.7rem\] {
+    font-size: 1.25rem !important;
+  }
+
+  [data-mobile-projects-page="true"] .h-\[74px\],
+  [data-mobile-projects-page="true"] .w-\[74px\] {
+    width: 48px !important;
+    height: 48px !important;
+  }
+
+  [data-mobile-projects-page="true"] .h-\[72px\],
+  [data-mobile-projects-page="true"] .w-\[72px\] {
+    width: 48px !important;
+    height: 48px !important;
+  }
+
+  [data-mobile-projects-page="true"] .h-20,
+  [data-mobile-projects-page="true"] .w-20 {
+    width: 48px !important;
+    height: 48px !important;
+  }
+
+  [data-mobile-projects-page="true"] .min-h-\[116px\] {
+    min-height: 72px !important;
+  }
+
+  [data-mobile-projects-page="true"] .min-h-\[58px\],
+  [data-mobile-projects-page="true"] .min-h-\[56px\],
+  [data-mobile-projects-page="true"] .min-h-\[52px\],
+  [data-mobile-projects-page="true"] .min-h-\[48px\] {
+    min-height: 44px !important;
+  }
+
+  [data-mobile-projects-page="true"] input,
+  [data-mobile-projects-page="true"] textarea,
+  [data-mobile-projects-page="true"] select,
+  [data-mobile-projects-page="true"] button {
+    font-size: 0.94rem !important;
+  }
+
+  html[data-mobile-display-mode="care"] [data-mobile-projects-page="true"] {
+    padding-bottom: 12rem;
+  }
+
+  html[data-mobile-display-mode="care"] [data-mobile-projects-page="true"] h1,
+  html[data-mobile-display-mode="care"] [data-mobile-projects-page="true"] .text-\[3rem\] {
+    font-size: 3rem !important;
+  }
+
+  html[data-mobile-display-mode="care"] [data-mobile-projects-page="true"] .text-\[2rem\] {
+    font-size: 2rem !important;
+  }
+
+  html[data-mobile-display-mode="care"] [data-mobile-projects-page="true"] .text-\[1\.8rem\] {
+    font-size: 1.8rem !important;
+  }
+
+  html[data-mobile-display-mode="care"] [data-mobile-projects-page="true"] .text-\[1\.7rem\] {
+    font-size: 1.7rem !important;
+  }
+
+  html[data-mobile-display-mode="care"] [data-mobile-projects-page="true"] .text-\[1\.65rem\] {
+    font-size: 1.65rem !important;
+  }
+
+  html[data-mobile-display-mode="care"] [data-mobile-projects-page="true"] .text-\[1\.45rem\] {
+    font-size: 1.45rem !important;
+  }
+
+  html[data-mobile-display-mode="care"] [data-mobile-projects-page="true"] .text-\[1\.35rem\] {
+    font-size: 1.35rem !important;
+  }
+
+  html[data-mobile-display-mode="care"] [data-mobile-projects-page="true"] .text-\[1\.25rem\] {
+    font-size: 1.25rem !important;
+  }
+
+  html[data-mobile-display-mode="care"] [data-mobile-projects-page="true"] .text-\[1\.2rem\] {
+    font-size: 1.2rem !important;
+  }
+
+  html[data-mobile-display-mode="care"] [data-mobile-projects-page="true"] .text-\[1\.15rem\] {
+    font-size: 1.15rem !important;
+  }
+
+  html[data-mobile-display-mode="care"] [data-mobile-projects-page="true"] .text-\[1\.1rem\] {
+    font-size: 1.1rem !important;
+  }
+
+  html[data-mobile-display-mode="care"] [data-mobile-projects-page="true"] .text-\[1\.05rem\] {
+    font-size: 1.05rem !important;
+  }
+
+  html[data-mobile-display-mode="care"] [data-mobile-projects-page="true"] .h-\[74px\],
+  html[data-mobile-display-mode="care"] [data-mobile-projects-page="true"] .w-\[74px\] {
+    width: 74px !important;
+    height: 74px !important;
+  }
+
+  html[data-mobile-display-mode="care"] [data-mobile-projects-page="true"] .h-\[72px\],
+  html[data-mobile-display-mode="care"] [data-mobile-projects-page="true"] .w-\[72px\] {
+    width: 72px !important;
+    height: 72px !important;
+  }
+
+  html[data-mobile-display-mode="care"] [data-mobile-projects-page="true"] .h-20,
+  html[data-mobile-display-mode="care"] [data-mobile-projects-page="true"] .w-20 {
+    width: 80px !important;
+    height: 80px !important;
+  }
+
+  html[data-mobile-display-mode="care"] [data-mobile-projects-page="true"] .min-h-\[116px\] {
+    min-height: 116px !important;
+  }
+
+  html[data-mobile-display-mode="care"] [data-mobile-projects-page="true"] .min-h-\[58px\] {
+    min-height: 58px !important;
+  }
+
+  html[data-mobile-display-mode="care"] [data-mobile-projects-page="true"] .min-h-\[56px\] {
+    min-height: 56px !important;
+  }
+
+  html[data-mobile-display-mode="care"] [data-mobile-projects-page="true"] .min-h-\[52px\] {
+    min-height: 52px !important;
+  }
+
+  html[data-mobile-display-mode="care"] [data-mobile-projects-page="true"] .min-h-\[48px\] {
+    min-height: 48px !important;
+  }
+
+  html[data-mobile-display-mode="care"] [data-mobile-projects-page="true"] input,
+  html[data-mobile-display-mode="care"] [data-mobile-projects-page="true"] textarea,
+  html[data-mobile-display-mode="care"] [data-mobile-projects-page="true"] select,
+  html[data-mobile-display-mode="care"] [data-mobile-projects-page="true"] button {
+    font-size: 1.2rem !important;
+  }
+}

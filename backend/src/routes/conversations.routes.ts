@@ -6,6 +6,7 @@ import {
   getAllUserConversations,
   getConversationById,
   deleteConversation,
+  updateConversationTitle,
   addMessage,
   getConversationMessages,
   getAgentByIdAndUser,
@@ -34,7 +35,7 @@ router.get('/', async (req: AuthenticatedRequest, res: Response) => {
 router.get('/:agentId', async (req: AuthenticatedRequest, res: Response) => {
   try {
     const userId = req.user!.userId;
-    const { agentId } = req.params;
+    const agentId = String(req.params.agentId);
 
     // Verify user owns the agent
     const agent = await getAgentByIdAndUser(agentId, userId);
@@ -81,7 +82,7 @@ router.post('/', async (req: AuthenticatedRequest, res: Response) => {
 router.delete('/:id', async (req: AuthenticatedRequest, res: Response) => {
   try {
     const userId = req.user!.userId;
-    const { id } = req.params;
+    const id = String(req.params.id);
 
     const success = await deleteConversation(id, userId);
     if (!success) {
@@ -96,13 +97,68 @@ router.delete('/:id', async (req: AuthenticatedRequest, res: Response) => {
   }
 });
 
+// PATCH /api/conversations/:id - Rename a conversation/session
+router.patch('/:id', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const userId = req.user!.userId;
+    const id = String(req.params.id);
+    const title = typeof req.body?.title === 'string' ? req.body.title.trim() : '';
+
+    if (!title) {
+      res.status(400).json({ message: '请输入Session名称' });
+      return;
+    }
+
+    if (title.length > 80) {
+      res.status(400).json({ message: 'Session名称不能超过80个字符' });
+      return;
+    }
+
+    const conversation = await updateConversationTitle(id, userId, title);
+    if (!conversation) {
+      res.status(404).json({ message: '对话不存在' });
+      return;
+    }
+
+    res.json({ conversation });
+  } catch (error) {
+    console.error('Rename conversation error:', error);
+    res.status(500).json({ message: '重命名Session失败' });
+  }
+});
+
+// GET /api/conversations/:id/export - Export one session with its real runner session id
+router.get('/:id/export', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const userId = req.user!.userId;
+    const id = String(req.params.id);
+
+    const conversation = await getConversationById(id, userId);
+    if (!conversation) {
+      res.status(404).json({ message: '对话不存在' });
+      return;
+    }
+
+    const messages = await getConversationMessages(id, userId);
+    res.json({
+      sessionId: conversation.sessionId || null,
+      conversation,
+      messages,
+      exportedAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error('Export conversation error:', error);
+    res.status(500).json({ message: '导出对话失败' });
+  }
+});
+
 // ==================== MESSAGES ====================
 
 // GET /api/conversations/:id/messages - Get messages for a conversation
 router.get('/:id/messages', async (req: AuthenticatedRequest, res: Response) => {
   try {
     const userId = req.user!.userId;
-    const { id } = req.params;
+    const id = String(req.params.id);
 
     const messages = await getConversationMessages(id, userId);
     res.json({ messages });
@@ -116,7 +172,7 @@ router.get('/:id/messages', async (req: AuthenticatedRequest, res: Response) => 
 router.post('/:id/messages', async (req: AuthenticatedRequest, res: Response) => {
   try {
     const userId = req.user!.userId;
-    const { id } = req.params;
+    const id = String(req.params.id);
     const { role, content, metadata } = req.body;
 
     if (!role || !content) {

@@ -63,6 +63,7 @@ export const userAgentInstances = sqliteTable('user_agent_instances', {
   workspacePath: text('workspace_path').notNull(),
   baselineSnapshotPath: text('baseline_snapshot_path'), // snapshot path after cloning
   stateDir: text('state_dir'), // Optional per-agent OpenClaw isolated state dir
+  status: text('status').notNull().default('idle'), // idle, busy, error, offline
   manifest: text('manifest').notNull().default('{}'), // JSON manifest content
   tags: text('tags').notNull().default('[]'), // JSON array
   caveId: text('cave_id'), // Optional cave assignment
@@ -97,6 +98,7 @@ export const conversations = sqliteTable('conversations', {
   id: text('id').primaryKey(),
   userId: text('user_id').notNull().references(() => users.id),
   agentInstanceId: text('agent_instance_id').notNull().references(() => userAgentInstances.id),
+  sessionId: text('session_id'),
   title: text('title').notNull().default('新对话'),
   lastMessage: text('last_message').notNull().default(''),
   messageCount: integer('message_count').notNull().default(0),
@@ -186,6 +188,30 @@ export const teamRunSteps = sqliteTable('team_run_steps', {
 
 export type TeamRunStep = typeof teamRunSteps.$inferSelect;
 export type NewTeamRunStep = typeof teamRunSteps.$inferInsert;
+
+// ==================== PROJECTS ====================
+export const projects = sqliteTable('projects', {
+  id: text('id').primaryKey(),
+  userId: text('user_id').notNull().references(() => users.id),
+  name: text('name').notNull(),
+  description: text('description').notNull().default(''),
+  notes: text('notes').notNull().default(''),
+  icon: text('icon').notNull().default('/project-icons/folder-blue.svg'),
+  workspacePath: text('workspace_path').notNull(),
+  teamIds: text('team_ids').notNull().default('[]'),
+  ganttEnabled: integer('gantt_enabled', { mode: 'boolean' }).notNull().default(false),
+  ganttPlan: text('gantt_plan').notNull().default('[]'),
+  gitRemote: text('git_remote').notNull().default(''),
+  gitBranch: text('git_branch').notNull().default('main'),
+  gitCommit: text('git_commit').notNull().default(''),
+  status: text('status').notNull().default('active'),
+  lastOpenedAt: integer('last_opened_at', { mode: 'timestamp' }),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
+  updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull(),
+});
+
+export type Project = typeof projects.$inferSelect;
+export type NewProject = typeof projects.$inferInsert;
 
 // ==================== SOCIAL FEED / AGENT FORUM ====================
 

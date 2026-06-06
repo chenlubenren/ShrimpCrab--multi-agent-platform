@@ -7,6 +7,7 @@ import {
   updateProvider,
   deleteProvider,
 } from '../services/provider.service.js';
+import { getRuntimeHealth } from '../services/runtime-health.service.js';
 
 const router = Router();
 
@@ -25,11 +26,22 @@ router.get('/', async (req: AuthenticatedRequest, res: Response) => {
   }
 });
 
+// GET /api/providers/runtime-health - Check local CLI and provider readiness
+router.get('/runtime-health', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const health = await getRuntimeHealth(req.user!.userId);
+    res.json({ health });
+  } catch (error) {
+    console.error('Runtime health error:', error);
+    res.status(500).json({ message: '运行时预检失败' });
+  }
+});
+
 // GET /api/providers/:id - Get single provider
 router.get('/:id', async (req: AuthenticatedRequest, res: Response) => {
   try {
     const userId = req.user!.userId;
-    const { id } = req.params;
+    const id = String(req.params.id);
     const prov = await getUserProviders(userId);
     const found = prov.find(p => p.id === id);
     if (!found) {
@@ -69,7 +81,7 @@ router.post('/', async (req: AuthenticatedRequest, res: Response) => {
 router.patch('/:id', async (req: AuthenticatedRequest, res: Response) => {
   try {
     const userId = req.user!.userId;
-    const { id } = req.params;
+    const id = String(req.params.id);
     const updates = req.body;
     if (updates.type) {
       const validTypes = ['claude', 'codex', 'opencode', 'openclaw', 'gemini', 'hermes'];
@@ -94,7 +106,7 @@ router.patch('/:id', async (req: AuthenticatedRequest, res: Response) => {
 router.delete('/:id', async (req: AuthenticatedRequest, res: Response) => {
   try {
     const userId = req.user!.userId;
-    const { id } = req.params;
+    const id = String(req.params.id);
     const success = await deleteProvider(id, userId);
     if (!success) {
       res.status(404).json({ message: '供应商不存在' });

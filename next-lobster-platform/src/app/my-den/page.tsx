@@ -10,8 +10,26 @@ import { LobsterSprite } from '@/components/lobster/LobsterSprite';
 import { PixelButton } from '@/components/ui/PixelButton';
 import { BackButton } from '@/components/ui/BackButton';
 import { AgentConfigModal } from '@/components/agent/AgentConfigModal';
+import { hasConfiguredProvider } from '@/lib/agentProvider';
 
 const CAVE_COLORS = ['#3b82f6', '#22c55e', '#a855f7', '#f97316', '#ec4899', '#14b8a6'];
+
+function AgentProviderAvatar({ lobster }: { lobster: Lobster }) {
+  const configured = hasConfiguredProvider(lobster);
+  const label = configured ? '已配置供应商' : '未配置供应商';
+
+  return (
+    <div className="relative shrink-0" title={label}>
+      <LobsterSprite
+        lobster={lobster}
+        size="sm"
+        showProviderStatus
+        providerConfigured={configured}
+        animateStatus={false}
+      />
+    </div>
+  );
+}
 
 function CaveSection({
   cave,
@@ -21,6 +39,7 @@ function CaveSection({
   onMoveToCave,
   onDeleteLobster,
   onConfigLobster,
+  onChanged,
 }: {
   cave: Cave;
   lobsters: Lobster[];
@@ -29,6 +48,7 @@ function CaveSection({
   onMoveToCave?: (lobsterId: string, caveId: string | null) => void;
   onDeleteLobster?: (lobsterId: string) => void;
   onConfigLobster?: (lobster: Lobster) => void;
+  onChanged?: () => Promise<void> | void;
 }) {
   const [expanded, setExpanded] = useState(true);
   const isUnassigned = cave.id === '__unassigned__';
@@ -46,21 +66,21 @@ function CaveSection({
         onClick={() => setExpanded(!expanded)}
       >
         <div
-          className="w-12 h-12 rounded-full border-4 border-pixel-black flex items-center justify-center font-pixel text-white text-xl font-bold"
+          className="w-16 h-16 md:w-12 md:h-12 rounded-full border-4 border-pixel-black flex items-center justify-center font-pixel text-white text-2xl md:text-xl font-bold"
           style={{ background: cave.color, filter: 'brightness(0.8)' }}
         >
           {cave.name?.charAt(0) || '?'}
         </div>
         <div className="flex-1">
-          <h2 className="font-pixel text-xl text-white font-bold">{cave.name}</h2>
-          <p className="font-pixel text-white/80 text-sm">{lobsters.length} 只Agent</p>
+          <h2 className="font-pixel text-[1.7rem] md:text-xl leading-tight text-white font-bold">{cave.name}</h2>
+          <p className="font-pixel text-white/80 text-[1.1rem] md:text-sm mt-1">{lobsters.length} 只Agent</p>
         </div>
-        <div className="flex items-center gap-3 shrink-0">
+        <div className="flex items-center gap-2 md:gap-3 shrink-0">
           {!isUnassigned && onOpenAddLobster && (
             <button
               type="button"
               onClick={(e) => { e.stopPropagation(); onOpenAddLobster(cave.id); }}
-              className="px-3 py-1 bg-pixel-white text-pixel-black border-2 border-pixel-black font-pixel text-xs font-bold hover:bg-pixel-yellow transition-colors"
+              className="px-3 py-2 md:py-1 bg-pixel-white text-pixel-black border-2 border-pixel-black font-pixel text-sm md:text-xs font-bold hover:bg-pixel-yellow transition-colors"
               style={{ boxShadow: '2px 2px 0px 0px #101010' }}
             >
               + 添加Agent
@@ -70,13 +90,13 @@ function CaveSection({
             <button
               type="button"
               onClick={(e) => { e.stopPropagation(); onDeleteCave(cave.id); }}
-              className="px-3 py-1 bg-pixel-red text-pixel-white border-2 border-pixel-black font-pixel text-xs font-bold hover:bg-pixel-orange transition-colors"
+              className="hidden sm:block px-3 py-2 md:py-1 bg-pixel-red text-pixel-white border-2 border-pixel-black font-pixel text-sm md:text-xs font-bold hover:bg-pixel-orange transition-colors"
               style={{ boxShadow: '2px 2px 0px 0px #101010' }}
             >
               删除窝
             </button>
           )}
-          <div className="font-pixel text-white text-2xl font-bold">
+          <div className="font-pixel text-white text-3xl md:text-2xl font-bold">
             {expanded ? '▲' : '▼'}
           </div>
         </div>
@@ -92,7 +112,7 @@ function CaveSection({
             transition={{ duration: 0.3 }}
             className="overflow-hidden"
           >
-            <div className="border-4 border-t-0 border-pixel-black p-4 bg-pixel-white/80" style={{ borderColor: '#101010' }}>
+            <div className="border-4 border-t-0 border-pixel-black p-3 md:p-4 bg-pixel-white/80" style={{ borderColor: '#101010' }}>
               {lobsters.length > 0 ? (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 items-stretch">
                   {lobsters.map((lobster: Lobster, index: number) => (
@@ -103,14 +123,14 @@ function CaveSection({
                         animate={{ opacity: 1, scale: 1 }}
                         transition={{ delay: index * 0.05 }}
                       >
-                        <LobsterCard lobster={lobster} onDelete={onDeleteLobster} onConfig={onConfigLobster} />
+                        <LobsterCard lobster={lobster} onDelete={onDeleteLobster} onConfig={onConfigLobster} onChanged={onChanged} />
                       </motion.div>
                       {!isUnassigned && onMoveToCave && (
                         <div className="flex gap-1 flex-wrap">
                           <button
                             type="button"
                             onClick={() => onMoveToCave(lobster.id, null)}
-                            className="px-2 py-1 border-2 border-pixel-black font-pixel text-xs font-bold bg-pixel-white text-pixel-black hover:bg-pixel-yellow transition-colors"
+                            className="px-3 py-2 md:px-2 md:py-1 border-2 border-pixel-black font-pixel text-sm md:text-xs font-bold bg-pixel-white text-pixel-black hover:bg-pixel-yellow transition-colors"
                             style={{ boxShadow: '2px 2px 0 #101010' }}
                           >
                             移出窝
@@ -122,7 +142,7 @@ function CaveSection({
                 </div>
               ) : (
                 <div className="text-center py-8">
-                  <p className="font-pixel text-pixel-black/50 text-sm">这个窝里还没有Agent</p>
+                  <p className="font-pixel text-pixel-black/50 text-[1.2rem] md:text-sm">这个窝里还没有Agent</p>
                   <Link href="/market" className="mt-3 inline-block">
                     <PixelButton variant="primary" size="sm">去领养</PixelButton>
                   </Link>
@@ -137,7 +157,7 @@ function CaveSection({
 }
 
 export default function MyDenPage() {
-  const { lobsters, caves, addCave, removeCave, moveLobsterToCave, createCaveAPI, deleteCaveAPI, moveAgentToCaveAPI, fetchAgents, fetchCaves, isInitialized, initialize, deleteAgentAPI } = useStore();
+  const { lobsters, caves, createCaveAPI, deleteCaveAPI, moveAgentToCaveAPI, isInitialized, initialize, deleteAgentAPI } = useStore();
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [addTargetCaveId, setAddTargetCaveId] = useState<string | null>(null);
   const [newCaveName, setNewCaveName] = useState('');
@@ -244,19 +264,26 @@ export default function MyDenPage() {
       if (list.length) addFromOtherCaves.push({ cave: c, list });
     }
   }
+  const configuredAgentCount = lobsters.filter(hasConfiguredProvider).length;
+  const unconfiguredAgentCount = lobsters.length - configuredAgentCount;
 
   return (
-    <div className="max-w-6xl mx-auto px-4 pb-16">
-      <BackButton href="/" />
+    <div className="max-w-6xl mx-auto px-3 pb-48 md:px-4 md:pb-16">
+      <div className="hidden md:block">
+        <BackButton href="/" />
+      </div>
 
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
-        className="text-center mb-8 pt-6"
+        className="mb-6 border-b-4 border-pixel-black bg-pixel-white pb-4 pt-3 text-left md:mb-8 md:border-b-0 md:bg-transparent md:pb-0 md:pt-6 md:text-center"
       >
-        <h1 className="chinese-large text-pixel-black mb-2">我的agent窝</h1>
-        <p className="font-pixel text-xl text-pixel-blue">MY AGENT DEN</p>
-        <p className="font-pixel text-sm text-pixel-black/60 mt-2">
+        <p className="font-pixel text-[1.25rem] leading-none text-pixel-black/55 md:hidden">MY AGENT DEN</p>
+        <h1 className="mt-2 font-pixel text-[3rem] font-bold leading-none text-pixel-black md:chinese-large md:mb-2">
+          我的 Agent 窝
+        </h1>
+        <p className="hidden font-pixel text-xl text-pixel-blue md:block">MY AGENT DEN</p>
+        <p className="mt-2 font-pixel text-[1.2rem] leading-snug text-pixel-black/60 md:text-sm">
           {lobsters.length} 只Agent · {caves.length} 个窝
         </p>
       </motion.div>
@@ -266,35 +293,29 @@ export default function MyDenPage() {
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         transition={{ delay: 0.2 }}
-        className="flex justify-center gap-6 mb-8 flex-wrap"
+        className="mb-6 grid grid-cols-3 gap-2 md:mb-8 md:flex md:justify-center md:gap-6 md:flex-wrap"
       >
-        <div className="bg-pixel-white border-4 border-pixel-black px-6 py-3" style={{ boxShadow: '4px 4px 0px 0px #101010' }}>
-          <p className="font-pixel text-xs text-pixel-black/60">总计</p>
-          <p className="font-pixel text-2xl text-pixel-black">{lobsters.length}</p>
+        <div className="bg-pixel-white border-4 border-pixel-black px-3 py-3 text-center md:px-6 md:text-left" style={{ boxShadow: '4px 4px 0px 0px #101010' }}>
+          <p className="font-pixel text-base leading-none text-pixel-black/60 md:text-xs">总计</p>
+          <p className="mt-1 font-pixel text-[1.8rem] leading-none text-pixel-black md:text-2xl md:leading-normal">{lobsters.length}</p>
         </div>
-        <div className="bg-pixel-green border-4 border-pixel-black px-6 py-3" style={{ boxShadow: '4px 4px 0px 0px #101010' }}>
-          <p className="font-pixel text-xs text-pixel-white">空闲</p>
-          <p className="font-pixel text-2xl text-pixel-white">
-            {lobsters.filter((l: Lobster) => l.status === 'idle').length}
+        <div className="bg-pixel-green border-4 border-pixel-black px-3 py-3 text-center md:px-6 md:text-left" style={{ boxShadow: '4px 4px 0px 0px #101010' }}>
+          <p className="font-pixel text-base leading-none text-pixel-white md:text-xs">已配置</p>
+          <p className="mt-1 font-pixel text-[1.8rem] leading-none text-pixel-white md:text-2xl md:leading-normal">
+            {configuredAgentCount}
           </p>
         </div>
-        <div className="bg-pixel-yellow border-4 border-pixel-black px-6 py-3" style={{ boxShadow: '4px 4px 0px 0px #101010' }}>
-          <p className="font-pixel text-xs text-pixel-black">工作中</p>
-          <p className="font-pixel text-2xl text-pixel-black">
-            {lobsters.filter((l: Lobster) => l.status === 'working').length}
-          </p>
-        </div>
-        <div className="bg-pixel-red border-4 border-pixel-black px-6 py-3" style={{ boxShadow: '4px 4px 0px 0px #101010' }}>
-          <p className="font-pixel text-xs text-pixel-white">忙碌</p>
-          <p className="font-pixel text-2xl text-pixel-white">
-            {lobsters.filter((l: Lobster) => l.status === 'busy').length}
+        <div className="bg-pixel-gray border-4 border-pixel-black px-3 py-3 text-center md:px-6 md:text-left" style={{ boxShadow: '4px 4px 0px 0px #101010' }}>
+          <p className="font-pixel text-base leading-none text-pixel-white md:text-xs">未配置</p>
+          <p className="mt-1 font-pixel text-[1.8rem] leading-none text-pixel-black md:text-2xl md:leading-normal">
+            {unconfiguredAgentCount}
           </p>
         </div>
       </motion.div>
 
       {/* Create Cave Button */}
-      <div className="flex justify-center mb-6">
-        <PixelButton variant="primary" onClick={() => setShowCreateDialog(true)}>
+      <div className="mb-6 flex justify-center">
+        <PixelButton variant="primary" onClick={() => setShowCreateDialog(true)} className="min-h-[56px] w-full text-[1.2rem] md:min-h-0 md:w-auto md:text-base">
           + 创建新agent窝
         </PixelButton>
       </div>
@@ -307,9 +328,9 @@ export default function MyDenPage() {
           className="text-center py-16"
         >
           <div className="text-6xl mb-4">🦞</div>
-          <h2 className="chinese-large text-pixel-black mb-4">暂无agent窝</h2>
-          <p className="font-pixel text-pixel-black/60 mb-6">先去创建一个agent窝吧！</p>
-          <PixelButton variant="primary" onClick={() => setShowCreateDialog(true)}>
+          <h2 className="font-pixel text-[2.2rem] font-bold leading-tight text-pixel-black mb-4 md:chinese-large">暂无 Agent 窝</h2>
+          <p className="font-pixel text-[1.2rem] text-pixel-black/60 mb-6 md:text-base">先去创建一个agent窝吧！</p>
+          <PixelButton variant="primary" onClick={() => setShowCreateDialog(true)} className="min-h-[56px] text-[1.2rem] md:min-h-0 md:text-base">
             创建第一个窝
           </PixelButton>
         </motion.div>
@@ -326,6 +347,7 @@ export default function MyDenPage() {
               onMoveToCave={handleMoveToCave}
               onDeleteLobster={handleDeleteLobster}
               onConfigLobster={handleConfigLobster}
+              onChanged={initialize}
             />
           ))}
 
@@ -337,6 +359,7 @@ export default function MyDenPage() {
               onDeleteCave={() => {}}
               onDeleteLobster={handleDeleteLobster}
               onConfigLobster={handleConfigLobster}
+              onChanged={initialize}
             />
           )}
         </div>
@@ -363,7 +386,7 @@ export default function MyDenPage() {
               onClick={(e) => e.stopPropagation()}
             >
               <div
-                className="text-pixel-white font-pixel text-lg p-4 border-b-4 border-pixel-black flex justify-between items-center gap-2 shrink-0"
+                className="text-pixel-white font-pixel text-[1.35rem] md:text-lg p-4 border-b-4 border-pixel-black flex justify-between items-center gap-2 shrink-0"
                 style={{ background: addTargetCave.color }}
               >
                 <span className="leading-tight">
@@ -372,7 +395,7 @@ export default function MyDenPage() {
                 <button
                   type="button"
                   onClick={() => setAddTargetCaveId(null)}
-                  className="w-8 h-8 shrink-0 bg-pixel-red text-pixel-white border-2 border-pixel-black flex items-center justify-center hover:bg-pixel-orange font-pixel text-sm"
+                  className="w-10 h-10 md:w-8 md:h-8 shrink-0 bg-pixel-red text-pixel-white border-2 border-pixel-black flex items-center justify-center hover:bg-pixel-orange font-pixel text-base md:text-sm"
                   style={{ boxShadow: '2px 2px 0px 0px #101010' }}
                 >
                   X
@@ -395,18 +418,18 @@ export default function MyDenPage() {
                           {addUnassigned.map((l) => (
                             <li
                               key={l.id}
-                              className="flex items-center gap-3 border-2 border-pixel-black p-2 bg-pixel-white"
+                              className="flex items-center gap-3 border-2 border-pixel-black p-3 md:p-2 bg-pixel-white"
                               style={{ boxShadow: '3px 3px 0 #101010' }}
                             >
-                              <LobsterSprite lobster={l} size="sm" showStatus={false} />
+                              <AgentProviderAvatar lobster={l} />
                               <div className="flex-1 min-w-0">
-                                <p className="font-pixel text-sm text-pixel-black font-bold truncate">{l.name}</p>
-                                <p className="font-pixel text-xs text-pixel-black/60 truncate">{l.role}</p>
+                                <p className="font-pixel text-[1.15rem] md:text-sm text-pixel-black font-bold truncate">{l.name}</p>
+                                <p className="font-pixel text-base md:text-xs text-pixel-black/60 truncate">{l.role}</p>
                               </div>
                               <button
                                 type="button"
-                                onClick={() => moveLobsterToCave(l.id, addTargetCave.id)}
-                                className="px-2 py-1 shrink-0 bg-pixel-green text-pixel-white border-2 border-pixel-black font-pixel text-xs font-bold hover:brightness-95"
+                                onClick={() => void handleMoveToCave(l.id, addTargetCave.id)}
+                                className="px-3 py-2 md:px-2 md:py-1 shrink-0 bg-pixel-green text-pixel-white border-2 border-pixel-black font-pixel text-sm md:text-xs font-bold hover:brightness-95"
                                 style={{ boxShadow: '2px 2px 0 #101010' }}
                               >
                                 放入此Agent窝
@@ -425,18 +448,18 @@ export default function MyDenPage() {
                           {list.map((l) => (
                             <li
                               key={l.id}
-                              className="flex items-center gap-3 border-2 border-pixel-black p-2 bg-pixel-white"
+                              className="flex items-center gap-3 border-2 border-pixel-black p-3 md:p-2 bg-pixel-white"
                               style={{ boxShadow: '3px 3px 0 #101010' }}
                             >
-                              <LobsterSprite lobster={l} size="sm" showStatus={false} />
+                              <AgentProviderAvatar lobster={l} />
                               <div className="flex-1 min-w-0">
-                                <p className="font-pixel text-sm text-pixel-black font-bold truncate">{l.name}</p>
-                                <p className="font-pixel text-xs text-pixel-black/60 truncate">{l.role}</p>
+                                <p className="font-pixel text-[1.15rem] md:text-sm text-pixel-black font-bold truncate">{l.name}</p>
+                                <p className="font-pixel text-base md:text-xs text-pixel-black/60 truncate">{l.role}</p>
                               </div>
                               <button
                                 type="button"
-                                onClick={() => moveLobsterToCave(l.id, addTargetCave.id)}
-                                className="px-2 py-1 shrink-0 bg-pixel-green text-pixel-white border-2 border-pixel-black font-pixel text-xs font-bold hover:brightness-95"
+                                onClick={() => void handleMoveToCave(l.id, addTargetCave.id)}
+                                className="px-3 py-2 md:px-2 md:py-1 shrink-0 bg-pixel-green text-pixel-white border-2 border-pixel-black font-pixel text-sm md:text-xs font-bold hover:brightness-95"
                                 style={{ boxShadow: '2px 2px 0 #101010' }}
                               >
                                 放入此Agent窝

@@ -7,6 +7,8 @@ export interface AgentChatMessage {
   role: 'user' | 'assistant' | 'system';
   content: string;
   timestamp: Date;
+  sessionId?: string | null;
+  conversationId?: string | null;
   isToolCall?: boolean;
   toolName?: string;
   isComplete?: boolean;
@@ -17,13 +19,14 @@ export interface AgentChatMessage {
 }
 
 export interface WebSocketMessage {
-  type: 'connected' | 'session_started' | 'session_stopped' | 'agent_output' | 'session_ended' | 'error' | 'pong';
+  type: 'connected' | 'session_started' | 'session_stopped' | 'agent_output' | 'message_saved' | 'session_ended' | 'error' | 'pong';
   payload?: Record<string, unknown>;
 }
 
 interface UseAgentChatOptions {
   agentId: string;
   token: string;
+  conversationId?: string | null;
   wsPort?: number;
   autoConnect?: boolean;
   autoStartSession?: boolean;
@@ -34,12 +37,15 @@ interface UseAgentChatReturn {
   isSessionActive: boolean;
   messages: AgentChatMessage[];
   error: string | null;
+  currentSessionId: string | null;
+  currentConversationId: string | null;
   sendMessage: (content: string) => void;
   startSession: () => void;
   stopSession: () => void;
   connect: () => void;
   disconnect: () => void;
   clearMessages: () => void;
+  hydrateMessages: (messages: AgentChatMessage[]) => void;
 }
 
 const WS_BASE = 'ws://localhost:3003';
@@ -47,6 +53,7 @@ const WS_BASE = 'ws://localhost:3003';
 export function useAgentChat({
   agentId,
   token,
+  conversationId,
   wsPort = 3003,
   autoConnect = true,
   autoStartSession = true,
@@ -55,6 +62,8 @@ export function useAgentChat({
   const [isSessionActive, setIsSessionActive] = useState(false);
   const [messages, setMessages] = useState<AgentChatMessage[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
+  const [currentConversationId, setCurrentConversationId] = useState<string | null>(conversationId || null);
   const sessionStartedRef = useRef(false);
 
   const wsRef = useRef<WebSocket | null>(null);
@@ -65,6 +74,10 @@ export function useAgentChat({
     setMessages([]);
   }, []);
 
+  const hydrateMessages = useCallback((nextMessages: AgentChatMessage[]) => {
+    setMessages(nextMessages);
+  }, []);
+
   const connect = useCallback(() => {
     if (
       wsRef.current?.readyState === WebSocket.OPEN ||
@@ -73,7 +86,14 @@ export function useAgentChat({
       return;
     }
 
-    const wsUrl = `${WS_BASE}?token=${encodeURIComponent(token)}&agentId=${encodeURIComponent(agentId)}`;
+    const params = new URLSearchParams({
+      token,
+      agentId,
+    });
+    if (conversationId) {
+      params.set('conversationId', conversationId);
+    }
+    const wsUrl = `${WS_BASE}?${params.toString()}`;
     const ws = new WebSocket(wsUrl);
 
     ws.onopen = () => {
@@ -91,8 +111,8 @@ export function useAgentChat({
       // Auto-start session if enabled
       if (autoStartSession && !sessionStartedRef.current) {
         setTimeout(() => {
-          if (ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ type: 'start' }));
+          if (ws.readyState === WebSocket.OPEN && !sessionStartedRef.current) {
+            ws.send(JSON.stringify({ type: 'start', payload: { conversationId } }));
             sessionStartedRef.current = true;
           }
         }, 1000);
@@ -117,6 +137,7 @@ export function useAgentChat({
       console.log('WebSocket closed:', event.code, event.reason);
       setIsConnected(false);
       setIsSessionActive(false);
+      sessionStartedRef.current = false;
 
       // Clear ping interval
       if (pingIntervalRef.current) {
@@ -133,7 +154,7 @@ export function useAgentChat({
     };
 
     wsRef.current = ws;
-  }, [agentId, token]);
+  }, [agentId, token, conversationId, autoStartSession]);
 
   const handleMessage = useCallback((data: WebSocketMessage) => {
     switch (data.type) {
@@ -142,22 +163,31 @@ export function useAgentChat({
         break;
 
       case 'session_started':
+        setCurrentSessionId(typeof data.payload?.sessionId === 'string' ? data.payload.sessionId : null);
+        setCurrentConversationId(
+          typeof data.payload?.conversationId === 'string' ? data.payload.conversationId : null
+        );
         setIsSessionActive(true);
         setError(null);
         break;
 
       case 'session_stopped':
         setIsSessionActive(false);
+        setCurrentSessionId((current) => typeof data.payload?.sessionId === 'string' ? data.payload.sessionId : current);
         break;
 
       case 'session_ended':
         setIsSessionActive(false);
+        setCurrentSessionId((current) => typeof data.payload?.sessionId === 'string' ? data.payload.sessionId : current);
         break;
 
       case 'agent_output': {
         const payload = data.payload as {
           content: string;
           outputType: string;
+          messageId?: string | null;
+          sessionId?: string | null;
+          conversationId?: string | null;
           timestamp: string;
         };
         
@@ -165,7 +195,7 @@ export function useAgentChat({
         if (!payload.content.trim()) return;
         
         // Avoid duplicates
-        const contentId = `msg_${payload.timestamp}_${payload.content.slice(0, 50)}`;
+        const contentId = payload.messageId || `msg_${payload.timestamp}_${payload.content.slice(0, 50)}`;
         
         setMessages((prev) => {
           // Check if this message already exists
@@ -177,12 +207,24 @@ export function useAgentChat({
             ...prev,
             {
               id: contentId,
-              role: 'assistant',
+              role: payload.outputType === 'error' ? 'system' : 'assistant',
               content: payload.content,
               timestamp: new Date(payload.timestamp),
+              sessionId: payload.sessionId || null,
+              conversationId: payload.conversationId || null,
             },
           ];
         });
+        break;
+      }
+
+      case 'message_saved': {
+        const payload = data.payload as {
+          sessionId?: string | null;
+          conversationId?: string | null;
+        };
+        if (payload?.sessionId) setCurrentSessionId(payload.sessionId);
+        if (payload?.conversationId) setCurrentConversationId(payload.conversationId);
         break;
       }
 
@@ -212,13 +254,15 @@ export function useAgentChat({
 
     setIsConnected(false);
     setIsSessionActive(false);
+    sessionStartedRef.current = false;
   }, []);
 
   const startSession = useCallback(() => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ type: 'start' }));
+      wsRef.current.send(JSON.stringify({ type: 'start', payload: { conversationId } }));
+      sessionStartedRef.current = true;
     }
-  }, []);
+  }, [conversationId]);
 
   const stopSession = useCallback(() => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
@@ -240,6 +284,8 @@ export function useAgentChat({
       role: 'user',
       content: content.trim(),
       timestamp: new Date(),
+      sessionId: currentSessionId,
+      conversationId: currentConversationId || conversationId || null,
     };
 
     setMessages((prev) => [...prev, userMsg]);
@@ -248,10 +294,20 @@ export function useAgentChat({
     wsRef.current.send(
       JSON.stringify({
         type: 'message',
-        payload: content.trim(),
+        payload: {
+          content: content.trim(),
+          conversationId: currentConversationId || conversationId || undefined,
+        },
       })
     );
-  }, []);
+  }, [conversationId, currentConversationId, currentSessionId]);
+
+  useEffect(() => {
+    sessionStartedRef.current = false;
+    setCurrentSessionId(null);
+    setCurrentConversationId(conversationId || null);
+    setMessages([]);
+  }, [agentId, conversationId]);
 
   // Auto-connect on mount
   useEffect(() => {
@@ -269,11 +325,14 @@ export function useAgentChat({
     isSessionActive,
     messages,
     error,
+    currentSessionId,
+    currentConversationId,
     sendMessage,
     startSession,
     stopSession,
     connect,
     disconnect,
     clearMessages,
+    hydrateMessages,
   };
 }

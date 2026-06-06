@@ -7,7 +7,7 @@
  * Supports both Windows and Linux environments
  */
 
-import { spawn, ChildProcess, execFileSync, execSync } from 'child_process';
+import { spawn, ChildProcess, execFileSync } from 'child_process';
 import { EventEmitter } from 'events';
 import fs from 'fs';
 import path from 'path';
@@ -27,8 +27,9 @@ export interface AgentSession {
   providerConfig?: {
     apiKey: string;
     baseUrl?: string;
-    models?: string[];
+    models?: Array<string | { id?: string; name?: string }>;
     stateDir?: string | null;
+    providerType?: string;
   };
 }
 
@@ -36,6 +37,22 @@ export interface RunnerResponse {
   type: 'output' | 'error' | 'status' | 'done';
   content: string;
   timestamp: Date;
+}
+
+export interface CliHealthCheck {
+  available: boolean;
+  version: string;
+  command: string;
+  args: string[];
+  displayCommand: string;
+  usesWsl: boolean;
+  errorName?: string;
+  errorCode?: string;
+  errorMessage?: string;
+  status?: number | null;
+  signal?: string | null;
+  stderr?: string;
+  stdout?: string;
 }
 
 interface PlatformConfig {
@@ -53,16 +70,18 @@ interface PlatformConfig {
   baseUrlEnv?: string;
 }
 
-interface ProviderConfig {
+export interface ProviderConfig {
   apiKey: string;
   baseUrl?: string;
-  models?: string[];
+  models?: Array<string | { id?: string; name?: string }>;
   stateDir?: string | null;
+  providerType?: string;
 }
 
 // Detect platform
 const isWindows = os.platform() === 'win32';
 const OPENCLAW_PROXY_PROVIDER_ID = 'openclaw_proxy';
+const OPENCLAW_MESSAGE_ARG_PLACEHOLDER = '__OPENCLAW_RUNTIME_MESSAGE__';
 
 function isWindowsDrivePath(filePath: string): boolean {
   return /^[A-Za-z]:[\\/]/.test(filePath);
@@ -117,6 +136,12 @@ function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
+function displayShellArg(value: string): string {
+  return /^[A-Za-z0-9_./:=@+-]+$/.test(value)
+    ? value
+    : `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+}
+
 function getOpenClawStateDir(workspacePath: string, providerConfig?: ProviderConfig): string {
   const stateDir = providerConfig?.stateDir || process.env.OPENCLAW_STATE_DIR;
   return resolveHostPath(stateDir || path.join(workspacePath, '.openclaw'));
@@ -126,11 +151,41 @@ function getOpenClawConfigPath(workspacePath: string, providerConfig?: ProviderC
   return path.join(getOpenClawStateDir(workspacePath, providerConfig), 'openclaw.json');
 }
 
+function getOpenClawRuntimeMessageDir(workspacePath: string, providerConfig?: ProviderConfig): string {
+  return path.join(getOpenClawStateDir(workspacePath, providerConfig), 'runtime-messages');
+}
+
+function writeOpenClawRuntimeMessageFile(
+  workspacePath: string,
+  providerConfig: ProviderConfig | undefined,
+  message: string
+): string {
+  const messageDir = getOpenClawRuntimeMessageDir(workspacePath, providerConfig);
+  fs.mkdirSync(messageDir, { recursive: true });
+  const messagePath = path.join(
+    messageDir,
+    `${Date.now()}-${crypto.randomBytes(6).toString('hex')}.txt`
+  );
+  fs.writeFileSync(messagePath, message, 'utf-8');
+  return messagePath;
+}
+
+function deleteOpenClawRuntimeMessageFile(messagePath: string): void {
+  try {
+    if (fs.existsSync(messagePath)) {
+      fs.unlinkSync(messagePath);
+    }
+  } catch {
+    // Best-effort cleanup only.
+  }
+}
+
 function prepareOpenClawProviderConfig(workspacePath: string, providerConfig?: ProviderConfig): void {
-  const model = providerConfig?.models?.[0];
+  const model = getFirstModelId(providerConfig);
   if (!providerConfig?.baseUrl || !model) {
     return;
   }
+  const api = getOpenClawProviderApi(providerConfig);
 
   const stateDir = getOpenClawStateDir(workspacePath, providerConfig);
   const configPath = getOpenClawConfigPath(workspacePath, providerConfig);
@@ -163,25 +218,10 @@ function prepareOpenClawProviderConfig(workspacePath: string, providerConfig?: P
       mode: 'merge',
       providers: {
         [OPENCLAW_PROXY_PROVIDER_ID]: {
-          baseUrl: providerConfig.baseUrl,
-          api: 'openai-responses',
-          models: [
-            {
-              id: model,
-              name: model,
-              reasoning: true,
-              input: ['text'],
-              cost: {
-                input: 0,
-                output: 0,
-                cacheRead: 0,
-                cacheWrite: 0,
-              },
-              contextWindow: 1000000,
-              maxTokens: 32768,
-              api: 'openai-responses',
-            },
-          ],
+          baseUrl: normalizeBaseUrl(providerConfig.baseUrl),
+          api,
+          authHeader: true,
+          models: [buildOpenClawModelConfig(model, providerConfig)],
         },
       },
     },
@@ -248,6 +288,23 @@ function getBashLauncher(script: string): { command: string; args: string[] } {
     : { command: 'bash', args: ['-lc', script] };
 }
 
+function getClaudeCommand(): string {
+  if (!isWindows) return 'claude';
+
+  const appData = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
+  const claudeExePath = path.join(
+    appData,
+    'npm',
+    'node_modules',
+    '@anthropic-ai',
+    'claude-code',
+    'bin',
+    'claude.exe'
+  );
+
+  return fs.existsSync(claudeExePath) ? claudeExePath : 'claude.exe';
+}
+
 function getStringEnv(): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) {
@@ -255,18 +312,182 @@ function getStringEnv(): Record<string, string> {
       env[key] = value;
     }
   }
+
+  const pathKey = Object.keys(env).find((key) => key.toLowerCase() === 'path') || 'PATH';
+
+  if (isWindows) {
+    const npmGlobalBin = process.env.APPDATA
+      ? path.join(process.env.APPDATA, 'npm')
+      : path.join(os.homedir(), 'AppData', 'Roaming', 'npm');
+    const currentPath = env[pathKey] || '';
+    env[pathKey] = [npmGlobalBin, currentPath]
+      .filter(Boolean)
+      .join(path.delimiter);
+  } else {
+    const home = os.homedir();
+    const pathEntries = [
+      path.join(home, '.local', 'bin'),
+      path.join(home, '.local', 'node-v24.16.0-linux-x64', 'bin'),
+      path.join(home, '.npm-global', 'bin'),
+      '/usr/local/sbin',
+      '/usr/local/bin',
+      '/usr/sbin',
+      '/usr/bin',
+      '/sbin',
+      '/bin',
+    ];
+    const currentPath = env[pathKey] || '';
+    env[pathKey] = [...pathEntries, currentPath]
+      .filter(Boolean)
+      .join(path.delimiter);
+  }
+
   return env;
+}
+
+function getFirstModelId(providerConfig?: ProviderConfig): string | undefined {
+  const model = providerConfig?.models?.[0];
+  if (!model) return undefined;
+  return typeof model === 'string' ? model : model.id || model.name;
+}
+
+function normalizeBaseUrl(baseUrl?: string): string {
+  return (baseUrl || '').trim().replace(/\/+$/, '');
+}
+
+function shouldUseOpenAiCompletions(providerConfig?: ProviderConfig): boolean {
+  const baseUrl = normalizeBaseUrl(providerConfig?.baseUrl).toLowerCase();
+  if (!baseUrl) return false;
+  return !baseUrl.includes('api.openai.com');
+}
+
+function isDeepSeekProvider(providerConfig?: ProviderConfig): boolean {
+  return normalizeBaseUrl(providerConfig?.baseUrl).toLowerCase().includes('deepseek.com');
+}
+
+function isKimiCodingProvider(providerConfig?: ProviderConfig): boolean {
+  return normalizeBaseUrl(providerConfig?.baseUrl).toLowerCase().includes('api.kimi.com/coding');
+}
+
+function ensureTrailingSlash(value: string): string {
+  return value.endsWith('/') ? value : `${value}/`;
+}
+
+function getOpenClawProviderApi(providerConfig?: ProviderConfig): 'openai-responses' | 'openai-completions' {
+  return shouldUseOpenAiCompletions(providerConfig) ? 'openai-completions' : 'openai-responses';
+}
+
+function buildOpenClawModelConfig(
+  model: string,
+  providerConfig?: ProviderConfig
+): Record<string, unknown> {
+  const api = getOpenClawProviderApi(providerConfig);
+
+  if (isDeepSeekProvider(providerConfig)) {
+    return {
+      id: model,
+      name: model,
+      reasoning: true,
+      input: ['text'],
+      cost: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+      },
+      contextWindow: 1000000,
+      maxTokens: 384000,
+      api,
+      compat: {
+        supportsUsageInStreaming: true,
+        supportsReasoningEffort: true,
+        maxTokensField: 'max_tokens',
+        supportsStrictMode: false,
+        thinkingFormat: 'deepseek',
+        supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+      },
+    };
+  }
+
+  const modelConfig: Record<string, unknown> = {
+    id: model,
+    name: model,
+    reasoning: api === 'openai-responses',
+    input: ['text'],
+    cost: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+    },
+    contextWindow: 1000000,
+    maxTokens: 32768,
+    api,
+  };
+
+  return modelConfig;
+}
+
+function cleanCliStderr(stderr: string): string {
+  return stderr
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .filter((line) => !line.includes("Expected '=' in /etc/wsl.conf"))
+    .filter((line) => !line.includes('no stdin data received in 3s'))
+    .filter((line) => !line.includes('redirect stdin explicitly'))
+    .join('\n');
+}
+
+function terminateProcessTree(childProcess: ChildProcess): void {
+  if (isWindows && childProcess.pid) {
+    try {
+      execFileSync('taskkill', ['/PID', String(childProcess.pid), '/T', '/F'], {
+        stdio: ['ignore', 'ignore', 'ignore'],
+      });
+      return;
+    } catch {
+      // Fall back to Node's best-effort kill below.
+    }
+  }
+
+  childProcess.kill();
+}
+
+function buildOpenClawFileMessageCommand(args: string[], messagePath: string): string {
+  const nodeWrapper = [
+    "const { spawn } = require('node:child_process');",
+    "const fs = require('node:fs');",
+    "const args = JSON.parse(process.env.OPENCLAW_RUNTIME_ARGS_JSON || '[]');",
+    "const messagePath = process.env.OPENCLAW_RUNTIME_MESSAGE_FILE;",
+    "if (!messagePath) { console.error('Missing OPENCLAW_RUNTIME_MESSAGE_FILE'); process.exit(1); }",
+    "const messageIndex = args.indexOf('__OPENCLAW_RUNTIME_MESSAGE__');",
+    "if (messageIndex === -1) { console.error('Missing runtime message placeholder'); process.exit(1); }",
+    "args[messageIndex] = fs.readFileSync(messagePath, 'utf8');",
+    "const child = spawn('openclaw', args, { stdio: ['ignore', 'inherit', 'inherit'], env: process.env });",
+    "child.on('error', (error) => { console.error(error && error.message ? error.message : String(error)); process.exit(1); });",
+    "child.on('close', (code, signal) => { if (signal) process.kill(process.pid, signal); process.exit(code ?? 1); });",
+  ].join('\n');
+
+  return [
+    `export OPENCLAW_RUNTIME_MESSAGE_FILE=${shellQuote(toWslPath(messagePath))}`,
+    `export OPENCLAW_RUNTIME_ARGS_JSON=${shellQuote(JSON.stringify(args))}`,
+    "node <<'OPENCLAW_MESSAGE_WRAPPER'",
+    nodeWrapper,
+    'OPENCLAW_MESSAGE_WRAPPER',
+  ].join('\n');
 }
 
 const PLATFORM_CONFIGS: Record<AgentPlatform, PlatformConfig> = {
   'claude-code': {
-    command: 'claude',
+    command: getClaudeCommand(),
     args: (workspace) => ['-p', `--add-dir=${workspace}`],
     interactive: true,
-    checkCommand: 'claude',
+    checkCommand: getClaudeCommand(),
     versionFlag: '--version',
     usePrintMode: true,
     apiKeyEnv: 'ANTHROPIC_API_KEY',
+    baseUrlEnv: 'ANTHROPIC_BASE_URL',
   },
   'openclaw': {
     command: isWindows ? 'wsl' : 'bash',
@@ -328,6 +549,7 @@ const PLATFORM_CONFIGS: Record<AgentPlatform, PlatformConfig> = {
     versionFlag: '--version',
     usePrintMode: true,
     apiKeyEnv: 'OPENAI_API_KEY',
+    baseUrlEnv: 'OPENAI_BASE_URL',
   },
   'hermes': {
     command: isWindows ? 'hermes.cmd' : 'hermes',
@@ -350,37 +572,107 @@ const PLATFORM_CONFIGS: Record<AgentPlatform, PlatformConfig> = {
   },
 };
 
+function getCliHealthInvocation(platform: AgentPlatform): { command: string; args: string[]; usesWsl: boolean } {
+  const config = PLATFORM_CONFIGS[platform];
+  if (platform === 'openclaw' && isWindows) {
+    return {
+      command: 'wsl',
+      args: ['bash', '-lc', 'command -v openclaw >/dev/null && openclaw --version'],
+      usesWsl: true,
+    };
+  }
+
+  return {
+    command: config.checkCommand,
+    args: [config.versionFlag],
+    usesWsl: false,
+  };
+}
+
+function redactRuntimeDiagnostic(value: unknown): string {
+  const raw = Buffer.isBuffer(value)
+    ? value.toString('utf-8')
+    : typeof value === 'string'
+      ? value
+      : value == null
+        ? ''
+        : String(value);
+  let text = raw.replace(/\x1b\[[0-9;]*m/g, '').replace(/\s+/g, ' ').trim();
+
+  for (const [name, envValue] of Object.entries(process.env)) {
+    if (!envValue || envValue.length < 8) continue;
+    if (!/(KEY|TOKEN|SECRET|PASSWORD|AUTH|CREDENTIAL)/i.test(name)) continue;
+    text = text.split(envValue).join(`[redacted:${name}]`);
+  }
+
+  text = text
+    .replace(/\bsk-[A-Za-z0-9_\-]{12,}\b/g, '[redacted:key]')
+    .replace(/\b(?:anthropic|claude|openai|cohere|deepseek|kimi|coze)[_-]?[A-Za-z0-9_\-]{16,}\b/gi, '[redacted:token]');
+
+  return text.slice(0, 600);
+}
+
+function buildCliHealthResult(
+  invocation: { command: string; args: string[]; usesWsl: boolean },
+  overrides: Partial<CliHealthCheck>
+): CliHealthCheck {
+  return {
+    available: false,
+    version: '',
+    command: invocation.command,
+    args: invocation.args,
+    displayCommand: [invocation.command, ...invocation.args].map(displayShellArg).join(' '),
+    usesWsl: invocation.usesWsl,
+    ...overrides,
+  };
+}
+
+export function formatCliHealthFailure(platform: AgentPlatform | string, cli: CliHealthCheck): string {
+  const detail = cli.stderr || cli.errorMessage || cli.stdout || '';
+  const code = [cli.errorCode, cli.errorName].filter(Boolean).join('/');
+  const prefix = `${platform} CLI 不可用`;
+  const command = cli.displayCommand ? `检查命令：${cli.displayCommand}` : `命令：${cli.command}`;
+  const reason = detail || code || (cli.status != null ? `退出码 ${cli.status}` : '') || '未返回详细错误';
+  return `${prefix}。${command}。${code ? `错误：${code}。` : ''}${reason}`;
+}
+
 class AgentRunner extends EventEmitter {
   private sessions: Map<string, AgentSession> = new Map();
   private outputBuffers: Map<string, string> = new Map();
 
-  async checkCliAvailable(platform: AgentPlatform): Promise<{ available: boolean; version: string }> {
-    const config = PLATFORM_CONFIGS[platform];
-    
-    try {
-      if (platform === 'openclaw') {
-        const output = isWindows
-          ? execFileSync('wsl', ['bash', '-lc', 'command -v openclaw >/dev/null && openclaw --version'], {
-              encoding: 'utf-8',
-              timeout: 5000,
-              stdio: ['pipe', 'pipe', 'pipe'],
-            })
-          : execFileSync('openclaw', ['--version'], {
-              encoding: 'utf-8',
-              timeout: 5000,
-              stdio: ['pipe', 'pipe', 'pipe'],
-            });
-        return { available: true, version: output.trim() };
-      }
+  async checkCliAvailable(platform: AgentPlatform): Promise<CliHealthCheck> {
+    const invocation = getCliHealthInvocation(platform);
 
-      const output = execSync(`${config.checkCommand} ${config.versionFlag}`, {
+    try {
+      const output = execFileSync(invocation.command, invocation.args, {
         encoding: 'utf-8',
         timeout: 5000,
         stdio: ['pipe', 'pipe', 'pipe'],
+        env: getStringEnv(),
       });
-      return { available: true, version: output.trim() };
+      return buildCliHealthResult(invocation, {
+        available: true,
+        version: redactRuntimeDiagnostic(output),
+      });
     } catch (error) {
-      return { available: false, version: '' };
+      const err = error as Error & {
+        code?: string;
+        status?: number | null;
+        signal?: string | null;
+        stderr?: Buffer | string;
+        stdout?: Buffer | string;
+      };
+      return buildCliHealthResult(invocation, {
+        available: false,
+        version: '',
+        errorName: err.name,
+        errorCode: typeof err.code === 'string' ? err.code : undefined,
+        errorMessage: redactRuntimeDiagnostic(err.message),
+        status: typeof err.status === 'number' ? err.status : null,
+        signal: typeof err.signal === 'string' ? err.signal : null,
+        stderr: redactRuntimeDiagnostic(err.stderr),
+        stdout: redactRuntimeDiagnostic(err.stdout),
+      });
     }
   }
 
@@ -451,51 +743,132 @@ class AgentRunner extends EventEmitter {
     return null;
   }
 
-  private executeOpenClawTurn(session: AgentSession, message: string): Promise<string> {
-    const providerConfig = session.providerConfig;
-    const sessionKey = `agent:${session.agentId}:main`;
-    prepareOpenClawProviderConfig(session.workspacePath, providerConfig);
+  private extractCliText(rawOutput: string): string {
+    const trimmed = rawOutput.trim();
+    if (!trimmed) return '';
 
-    const configuredModel = providerConfig?.models?.[0];
-    const model = configuredModel && providerConfig?.baseUrl
-      ? `${OPENCLAW_PROXY_PROVIDER_ID}/${configuredModel}`
-      : configuredModel;
-    const commandParts = [
-      'openclaw',
-      'agent',
-      '--local',
-      '--session-key',
-      sessionKey,
-      '--message',
-      message,
-      '--timeout',
-      '600',
-      '--json',
-    ];
-
-    if (model) {
-      commandParts.splice(3, 0, '--model', model);
+    const candidates = [trimmed, ...trimmed.split(/\r?\n/).reverse()];
+    for (const candidate of candidates) {
+      try {
+        const parsed: unknown = JSON.parse(candidate);
+        const text = this.findStringField(parsed, [
+          'result',
+          'content',
+          'message',
+          'reply',
+          'response',
+          'text',
+          'output',
+        ]);
+        if (text) return text;
+      } catch {
+        // Try the next candidate.
+      }
     }
 
-    const script = buildOpenClawShellScript(
+    return trimmed;
+  }
+
+  private buildProviderEnv(
+    config: PlatformConfig,
+    workspacePath: string,
+    providerConfig?: ProviderConfig
+  ): Record<string, string> {
+    const env = getStringEnv();
+    if (config.workspaceEnv) {
+      env[config.workspaceEnv] = workspacePath;
+    }
+
+    if (providerConfig) {
+      if (config.apiKeyEnv) {
+        env[config.apiKeyEnv] = providerConfig.apiKey;
+      }
+      if (config.baseUrlEnv && providerConfig.baseUrl) {
+        env[config.baseUrlEnv] = isKimiCodingProvider(providerConfig)
+          ? ensureTrailingSlash(normalizeBaseUrl(providerConfig.baseUrl))
+          : providerConfig.baseUrl;
+      }
+
+      if (config.apiKeyEnv === 'ANTHROPIC_API_KEY' && isKimiCodingProvider(providerConfig)) {
+        env.ANTHROPIC_AUTH_TOKEN = providerConfig.apiKey;
+      }
+    }
+
+    return env;
+  }
+
+  private buildOneShotArgs(
+    platform: AgentPlatform,
+    workspacePath: string,
+    message: string,
+    providerConfig?: ProviderConfig
+  ): string[] {
+    const model = getFirstModelId(providerConfig);
+
+    if (platform === 'hermes') {
+      return ['-z', message];
+    }
+
+    if (platform === 'claude-code') {
+      const args = [
+        '-p',
+        message,
+        `--add-dir=${workspacePath}`,
+        '--output-format=json',
+        '--no-chrome',
+      ];
+      if (isKimiCodingProvider(providerConfig)) {
+        args.push('--bare');
+      }
+      if (model) {
+        args.push('--model', model);
+      }
+      return args;
+    }
+
+    if (platform === 'codex') {
+      const args = ['-y', '@openai/codex', '--print'];
+      if (model) {
+        args.push('--model', model);
+      }
+      args.push(message);
+      return args;
+    }
+
+    if (platform === 'opencode') {
+      const args = ['--print', message];
+      if (model) {
+        args.push('--model', model);
+      }
+      return args;
+    }
+
+    return PLATFORM_CONFIGS[platform].args(workspacePath, providerConfig);
+  }
+
+  private executeOneShotTurn(session: AgentSession, message: string): Promise<string> {
+    const config = PLATFORM_CONFIGS[session.platform];
+    const args = this.buildOneShotArgs(
+      session.platform,
       session.workspacePath,
-      providerConfig,
-      `exec ${commandParts.map(shellQuote).join(' ')}`
+      message,
+      session.providerConfig
     );
-    const launcher = getBashLauncher(script);
+    const env = this.buildProviderEnv(config, session.workspacePath, session.providerConfig);
 
     return new Promise((resolve, reject) => {
       let output = '';
       let errorOutput = '';
 
-      const childProcess = spawn(launcher.command, launcher.args, {
+      const childProcess = spawn(config.command, args, {
         cwd: session.workspacePath,
-        env: getStringEnv(),
+        env,
         stdio: ['pipe', 'pipe', 'pipe'],
-        shell: false,
+        shell: config.useShell ?? false,
       });
 
       session.process = childProcess;
+      childProcess.stdin?.end();
 
       childProcess.stdout?.on('data', (data: Buffer) => {
         output += data.toString();
@@ -512,6 +885,103 @@ class AgentRunner extends EventEmitter {
         }
 
         if (code === 0) {
+          resolve(this.extractCliText(output));
+        } else {
+          const outputText = this.extractCliText(output);
+          const stderrText = cleanCliStderr(errorOutput);
+          reject(new Error(outputText || stderrText || `${session.platform} exited with code ${code}`));
+        }
+      });
+
+      childProcess.on('error', (error) => {
+        session.process = null;
+        session.status = 'error';
+        reject(error);
+      });
+    });
+  }
+
+  private executeOpenClawTurn(session: AgentSession, message: string, timeoutMs = 300000): Promise<string> {
+    const providerConfig = session.providerConfig;
+    const sessionKey = `agent:${session.agentId}:${session.sessionId}`;
+    prepareOpenClawProviderConfig(session.workspacePath, providerConfig);
+    const messagePath = writeOpenClawRuntimeMessageFile(session.workspacePath, providerConfig, message);
+
+    const configuredModel = getFirstModelId(providerConfig);
+    const model = configuredModel && providerConfig?.baseUrl
+      ? `${OPENCLAW_PROXY_PROVIDER_ID}/${configuredModel}`
+      : configuredModel;
+    const commandParts = [
+      'agent',
+      '--local',
+    ];
+
+    if (model) {
+      commandParts.push('--model', model);
+    }
+
+    commandParts.push(
+      '--session-key',
+      sessionKey,
+      '--message',
+      OPENCLAW_MESSAGE_ARG_PLACEHOLDER
+    );
+
+    const commandSuffixParts = [
+      '--timeout',
+      String(Math.max(1, Math.ceil(timeoutMs / 1000))),
+      '--json',
+    ];
+
+    const script = buildOpenClawShellScript(
+      session.workspacePath,
+      providerConfig,
+      buildOpenClawFileMessageCommand([...commandParts, ...commandSuffixParts], messagePath)
+    );
+    const launcher = getBashLauncher(script);
+
+    return new Promise((resolve, reject) => {
+      let output = '';
+      let errorOutput = '';
+      let settled = false;
+
+      const childProcess = spawn(launcher.command, launcher.args, {
+        cwd: session.workspacePath,
+        env: getStringEnv(),
+        stdio: ['pipe', 'pipe', 'pipe'],
+        shell: false,
+      });
+
+      session.process = childProcess;
+      const timeout = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        session.process = null;
+        session.status = 'error';
+        terminateProcessTree(childProcess);
+        deleteOpenClawRuntimeMessageFile(messagePath);
+        reject(new Error(`Command timed out after ${Math.ceil(timeoutMs / 1000)} seconds`));
+      }, timeoutMs);
+
+      childProcess.stdout?.on('data', (data: Buffer) => {
+        output += data.toString();
+      });
+
+      childProcess.stderr?.on('data', (data: Buffer) => {
+        errorOutput += data.toString();
+      });
+
+      childProcess.on('close', (code) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        session.process = null;
+        deleteOpenClawRuntimeMessageFile(messagePath);
+        if (session.status !== 'stopped') {
+          session.status = code === 0 ? 'idle' : 'error';
+        }
+
+        if (code === 0) {
           resolve(this.extractOpenClawText(output));
         } else {
           reject(new Error(errorOutput.trim() || output.trim() || `OpenClaw exited with code ${code}`));
@@ -519,8 +989,12 @@ class AgentRunner extends EventEmitter {
       });
 
       childProcess.on('error', (error) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
         session.process = null;
         session.status = 'error';
+        deleteOpenClawRuntimeMessageFile(messagePath);
         reject(error);
       });
     });
@@ -534,9 +1008,17 @@ class AgentRunner extends EventEmitter {
     agentId: string,
     platform: AgentPlatform,
     workspacePath: string,
-    message: string
+    message: string,
+    providerConfig?: ProviderConfig,
+    timeoutMs = 300000
   ): Promise<string> {
     const resolvedWorkspacePath = resolveHostPath(workspacePath);
+    const resolvedProviderConfig = providerConfig
+      ? {
+          ...providerConfig,
+          stateDir: providerConfig.stateDir ? resolveHostPath(providerConfig.stateDir) : undefined,
+        }
+      : undefined;
 
     if (!fs.existsSync(resolvedWorkspacePath)) {
       throw new Error(`Workspace not found: ${resolvedWorkspacePath}`);
@@ -544,7 +1026,7 @@ class AgentRunner extends EventEmitter {
 
     const cliCheck = await this.checkCliAvailable(platform);
     if (!cliCheck.available) {
-      throw new Error(`${platform} CLI is not installed or not in PATH`);
+      throw new Error(formatCliHealthFailure(platform, cliCheck));
     }
 
     if (platform === 'openclaw') {
@@ -556,49 +1038,31 @@ class AgentRunner extends EventEmitter {
         process: null,
         status: 'waiting',
         startedAt: new Date(),
+        providerConfig: resolvedProviderConfig,
       };
-      return this.executeOpenClawTurn(session, message);
+      return this.executeOpenClawTurn(session, message, timeoutMs);
     }
 
     const config = PLATFORM_CONFIGS[platform];
-    const baseArgs = config.args(resolvedWorkspacePath);
     
     // Build environment
-    const env = getStringEnv();
-    if (config.workspaceEnv) {
-      env[config.workspaceEnv] = resolvedWorkspacePath;
-    }
+    const env = this.buildProviderEnv(config, resolvedWorkspacePath, resolvedProviderConfig);
 
     return new Promise((resolve, reject) => {
       let output = '';
       let errorOutput = '';
+      let settled = false;
 
-      // Determine args based on platform
-      let args: string[];
-      
-      if (platform === 'hermes') {
-        // Hermes uses -z for one-shot mode
-        args = ['-z', message, ...baseArgs];
-      } else if (platform === 'claude-code') {
-        // Claude Code -p mode with message as argument
-        args = ['-p', message, `--add-dir=${resolvedWorkspacePath}`, '--output-format=json', '--no-chrome'];
-      } else if (platform === 'codex') {
-        // Codex --print mode
-        args = ['-y', '@openai/codex', '--print', message];
-      } else if (platform === 'opencode') {
-        // OpenCode --print mode
-        args = ['--print', message];
-      } else {
-        args = baseArgs;
-      }
+      const args = this.buildOneShotArgs(platform, resolvedWorkspacePath, message, resolvedProviderConfig);
 
-      console.log(`Executing: ${config.command} ${args.join(' ')}`);
+      console.log(`Executing ${platform} one-shot command with ${args.length} args`);
       console.log(`Workspace: ${resolvedWorkspacePath}`);
 
       const childProcess = spawn(config.command, args, {
         cwd: resolvedWorkspacePath,
         env,
-        shell: config.useShell ?? true,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        shell: config.useShell ?? false,
       });
 
       childProcess.stdout?.on('data', (data: Buffer) => {
@@ -610,22 +1074,31 @@ class AgentRunner extends EventEmitter {
       });
 
       childProcess.on('close', (code) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
         if (code === 0) {
-          resolve(output);
+          resolve(this.extractCliText(output));
         } else {
-          reject(new Error(errorOutput || `Process exited with code ${code}`));
+          const outputText = this.extractCliText(output);
+          const stderrText = cleanCliStderr(errorOutput);
+          reject(new Error(outputText || stderrText || `Process exited with code ${code}`));
         }
       });
 
       childProcess.on('error', (error) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
         reject(error);
       });
 
-      // Timeout after 5 minutes
-      setTimeout(() => {
-        childProcess.kill();
-        reject(new Error('Command timed out after 5 minutes'));
-      }, 300000);
+      const timeout = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        terminateProcessTree(childProcess);
+        reject(new Error(`Command timed out after ${Math.ceil(timeoutMs / 1000)} seconds`));
+      }, timeoutMs);
     });
   }
 
@@ -652,7 +1125,7 @@ class AgentRunner extends EventEmitter {
 
     const cliCheck = await this.checkCliAvailable(platform);
     if (!cliCheck.available) {
-      throw new Error(`${platform} CLI is not installed or not in PATH`);
+      throw new Error(formatCliHealthFailure(platform, cliCheck));
     }
 
     const sessionId = this.generateSessionId();
@@ -677,21 +1150,27 @@ class AgentRunner extends EventEmitter {
       return session;
     }
 
-    // Build environment with provider config
-    const env = getStringEnv();
-    if (config.workspaceEnv) {
-      env[config.workspaceEnv] = resolvedWorkspacePath;
+    if (config.usePrintMode) {
+      const session: AgentSession = {
+        sessionId,
+        agentId,
+        platform,
+        workspacePath: resolvedWorkspacePath,
+        process: null,
+        status: 'idle',
+        startedAt: new Date(),
+        providerConfig: resolvedProviderConfig,
+      };
+
+      this.sessions.set(sessionId, session);
+      this.outputBuffers.set(sessionId, '');
+      this.emit('sessionStart', { sessionId, agentId, platform });
+
+      return session;
     }
 
-    // Set API key and base URL from provider config
-    if (resolvedProviderConfig) {
-      if (config.apiKeyEnv) {
-        env[config.apiKeyEnv] = resolvedProviderConfig.apiKey;
-      }
-      if (config.baseUrlEnv && resolvedProviderConfig.baseUrl) {
-        env[config.baseUrlEnv] = resolvedProviderConfig.baseUrl;
-      }
-    }
+    // Build environment with provider config
+    const env = this.buildProviderEnv(config, resolvedWorkspacePath, resolvedProviderConfig);
 
     // For interactive sessions, just spawn and wait for messages
     const args = config.args(resolvedWorkspacePath, resolvedProviderConfig);
@@ -747,6 +1226,7 @@ class AgentRunner extends EventEmitter {
     childProcess.on('exit', (code) => {
       const sess = this.sessions.get(sessionId);
       if (sess) {
+        sess.process = null;
         sess.status = code === 0 ? 'idle' : 'error';
       }
       
@@ -815,6 +1295,48 @@ class AgentRunner extends EventEmitter {
               timestamp: new Date(),
             } as RunnerResponse,
           });
+      });
+      return true;
+    }
+
+    const config = PLATFORM_CONFIGS[session.platform];
+    if (config.usePrintMode) {
+      if (session.status === 'waiting') {
+        this.emit('response', {
+          sessionId,
+          response: {
+            type: 'error',
+            content: `${session.platform} is still processing the previous message.`,
+            timestamp: new Date(),
+          } as RunnerResponse,
+        });
+        return true;
+      }
+
+      session.status = 'waiting';
+      void this.executeOneShotTurn(session, message)
+        .then((content) => {
+          const text = content || `${session.platform} completed without output.`;
+          this.outputBuffers.set(sessionId, `${this.outputBuffers.get(sessionId) || ''}${text}`);
+          this.emit('response', {
+            sessionId,
+            response: {
+              type: 'output',
+              content: text,
+              timestamp: new Date(),
+            } as RunnerResponse,
+          });
+        })
+        .catch((error: unknown) => {
+          const content = error instanceof Error ? error.message : `${session.platform} failed to process the message.`;
+          this.emit('response', {
+            sessionId,
+            response: {
+              type: 'error',
+              content,
+              timestamp: new Date(),
+            } as RunnerResponse,
+          });
         });
       return true;
     }
@@ -857,6 +1379,7 @@ class AgentRunner extends EventEmitter {
         if (!session.process.killed) {
           session.process.kill('SIGTERM');
         }
+        session.process = null;
       }
       
       session.status = 'stopped';
@@ -886,6 +1409,18 @@ class AgentRunner extends EventEmitter {
     );
   }
 
+  async stopSessionsByAgentId(agentId: string): Promise<number> {
+    const sessionIds = Array.from(this.sessions.values())
+      .filter((session) => session.agentId === agentId)
+      .map((session) => session.sessionId);
+
+    for (const sessionId of sessionIds) {
+      await this.stopSession(sessionId);
+    }
+
+    return sessionIds.length;
+  }
+
   async stopAll(): Promise<void> {
     const sessionIds = Array.from(this.sessions.keys());
     for (const sessionId of sessionIds) {
@@ -895,11 +1430,5 @@ class AgentRunner extends EventEmitter {
 }
 
 export const agentRunner = new AgentRunner();
-
-process.on('SIGINT', async () => {
-  console.log('Shutting down agent runner...');
-  await agentRunner.stopAll();
-  process.exit(0);
-});
 
 export default agentRunner;

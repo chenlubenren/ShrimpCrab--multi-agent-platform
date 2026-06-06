@@ -1,6 +1,8 @@
 import express from 'express';
 import cors from 'cors';
 import multer from 'multer';
+import fs from 'fs';
+import path from 'path';
 import 'dotenv/config';
 import authRoutes from './routes/auth.routes.js';
 import agentsRoutes from './routes/agents.routes.js';
@@ -10,7 +12,9 @@ import marketRoutes from './routes/market.routes.js';
 import socialRoutes from './routes/social.routes.js';
 import profileRoutes from './routes/profile.routes.js';
 import providersRoutes from './routes/providers.routes.js';
-import { initWorkspaceRoot } from './services/workspace.service.js';
+import workflowsRoutes from './routes/workflows.routes.js';
+import projectsRoutes from './routes/projects.routes.js';
+import { initWorkspaceRoot, resolveStoredPath } from './services/workspace.service.js';
 import { startChatServer } from './services/chat-websocket.service.js';
 import { agentRunner } from './services/agent-runner.service.js';
 import { cleanInvalidMarketAgents, cacheAllMarketAgentIcons } from './services/market.service.js';
@@ -54,23 +58,31 @@ app.use('/api/market', marketRoutes);
 app.use('/api/social', socialRoutes);
 app.use('/api/profile', profileRoutes);
 app.use('/api/providers', providersRoutes);
+app.use('/api/workflows', workflowsRoutes);
+app.use('/api/projects', projectsRoutes);
 
 // Serve agent avatars from workspaces
 app.get('/api/agents/:agentId/avatar/:filename', (req, res) => {
   const { agentId, filename } = req.params;
-  // Try to find workspace in data/workspaces subdirectories
-  const workspaceRoot = path.join(process.cwd(), 'data', 'workspaces');
-  const dirs = fs.readdirSync(workspaceRoot).filter(f => {
-    try {
-      return fs.statSync(path.join(workspaceRoot, f)).isDirectory();
-    } catch { return false; }
-  });
-  for (const userDir of dirs) {
-    const avatarPath = path.join(workspaceRoot, userDir, agentId, 'avatars', filename);
-    if (fs.existsSync(avatarPath)) {
-      return res.sendFile(avatarPath);
+  const workspaceRoot = resolveStoredPath(process.env.WORKSPACE_ROOT || path.join(process.cwd(), 'data', 'workspaces'));
+  const candidates: string[] = [];
+  const usersRoot = path.join(workspaceRoot, 'users');
+
+  if (fs.existsSync(usersRoot)) {
+    for (const userDir of fs.readdirSync(usersRoot)) {
+      candidates.push(path.join(usersRoot, userDir, 'agents', agentId, 'avatars', filename));
     }
   }
+
+  if (fs.existsSync(workspaceRoot)) {
+    for (const dir of fs.readdirSync(workspaceRoot)) {
+      candidates.push(path.join(workspaceRoot, dir, agentId, 'avatars', filename));
+    }
+  }
+
+  const avatarPath = candidates.find((candidate) => fs.existsSync(candidate));
+  if (avatarPath) return res.sendFile(avatarPath);
+
   res.status(404).json({ message: 'Avatar not found' });
 });
 
@@ -171,6 +183,21 @@ const server = app.listen(PORT, () => {
   console.log('   PATCH  /api/providers/:id');
   console.log('   DELETE /api/providers/:id');
   console.log('');
+  console.log('   Workflows:');
+  console.log('   POST   /api/workflows/generate-dsl');
+  console.log('   POST   /api/workflows/execute');
+  console.log('   GET    /api/workflows/executions');
+  console.log('   GET    /api/workflows/executions/:id');
+  console.log('   POST   /api/workflows/executions/:id/cancel');
+  console.log('');
+  console.log('   Projects:');
+  console.log('   GET    /api/projects');
+  console.log('   POST   /api/projects');
+  console.log('   GET    /api/projects/:id');
+  console.log('   PATCH  /api/projects/:id');
+  console.log('   POST   /api/projects/:id/open');
+  console.log('   DELETE /api/projects/:id');
+  console.log('');
   console.log('   Agent Config:');
   console.log('   PATCH  /api/agents/:id/config');
   console.log('   POST   /api/agents/:id/avatar');
@@ -179,26 +206,57 @@ const server = app.listen(PORT, () => {
   console.log(`   ws://localhost:${WS_PORT}?token=<jwt>&agentId=<agentId>`);
 });
 
-// Start WebSocket server
-startChatServer(Number(WS_PORT));
-
-// Graceful shutdown
-process.on('SIGINT', async () => {
-  console.log('\nShutting down...');
-  await agentRunner.stopAll();
-  server.close(() => {
-    console.log('Server closed');
-    process.exit(0);
-  });
+server.on('error', (error: NodeJS.ErrnoException) => {
+  if (error.code === 'EADDRINUSE') {
+    console.error(`HTTP port ${PORT} is already in use. Stop the old backend process and restart.`);
+  } else {
+    console.error('HTTP server error:', error);
+  }
+  process.exit(1);
 });
 
-process.on('SIGTERM', async () => {
-  console.log('\nShutting down...');
-  await agentRunner.stopAll();
-  server.close(() => {
+// Start WebSocket server
+const chatServer = startChatServer(Number(WS_PORT));
+
+// Graceful shutdown
+let isShuttingDown = false;
+
+async function shutdown(signal: NodeJS.Signals): Promise<void> {
+  if (isShuttingDown) return;
+  isShuttingDown = true;
+  console.log(`\nReceived ${signal}; shutting down...`);
+
+  const forceExitTimer = setTimeout(() => {
+    console.error('Forced shutdown after timeout');
+    process.exit(1);
+  }, 10000);
+  forceExitTimer.unref();
+
+  try {
+    await chatServer.shutdown();
+    await agentRunner.stopAll();
+    await new Promise<void>((resolve) => {
+      server.close((error?: Error) => {
+        if (error) {
+          console.error('HTTP server close error:', error);
+        }
+        resolve();
+      });
+    });
     console.log('Server closed');
     process.exit(0);
-  });
+  } catch (error) {
+    console.error('Shutdown error:', error);
+    process.exit(1);
+  }
+}
+
+process.once('SIGINT', () => {
+  void shutdown('SIGINT');
+});
+
+process.once('SIGTERM', () => {
+  void shutdown('SIGTERM');
 });
 
 export default app;

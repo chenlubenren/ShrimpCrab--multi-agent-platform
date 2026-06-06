@@ -7,13 +7,31 @@ import { IncomingMessage } from 'http';
 import { verifyToken } from '../utils/jwt.js';
 import { agentRunner, type AgentPlatform } from './agent-runner.service.js';
 import { getDb } from '../db/index.js';
-import { userAgentInstances, conversations, messages, providers } from '../db/schema.js';
+import {
+  userAgentInstances,
+  conversations,
+  messages as conversationMessages,
+  providers,
+  type Conversation,
+} from '../db/schema.js';
 import { eq, and } from 'drizzle-orm';
+import {
+  addMessage,
+  createConversation,
+  getConversationById,
+  readAgentUserConfig,
+} from './agent.service.js';
+import {
+  executeCozeAgentTurn,
+  type CozeChatHistoryMessage,
+} from './coze-market.service.js';
+import { buildAgentRuntimePrompt } from './agent-runtime-context.service.js';
 
 interface AuthenticatedWebSocket extends WebSocket {
   userId?: string;
   sessionId?: string;
   agentId?: string;
+  conversationId?: string;
   isAlive?: boolean;
 }
 
@@ -22,20 +40,75 @@ interface ChatMessage {
   payload?: string | Record<string, unknown>;
 }
 
-const SUPPORTED_AGENT_PLATFORMS: AgentPlatform[] = [
+interface RuntimeProviderConfig {
+  apiKey: string;
+  baseUrl?: string;
+  models?: string[];
+  stateDir?: string | null;
+  providerType?: string;
+}
+
+type RuntimeAgentPlatform = AgentPlatform | 'coze';
+
+function normalizeModelId(model: unknown): string {
+  if (typeof model === 'string') return model;
+  if (model && typeof model === 'object') {
+    const value = model as { id?: unknown; name?: unknown };
+    if (typeof value.id === 'string') return value.id;
+    if (typeof value.name === 'string') return value.name;
+  }
+  return '';
+}
+
+function parseProviderModels(rawModels?: string | null): string[] {
+  if (!rawModels) return [];
+  try {
+    const parsed = JSON.parse(rawModels);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.map(normalizeModelId).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+function preferSelectedModel(models: string[] | undefined, selectedModel?: string): string[] | undefined {
+  const cleanedModels = (models || []).filter(Boolean);
+  const model = selectedModel?.trim();
+  if (!model) return cleanedModels.length > 0 ? cleanedModels : undefined;
+  if (cleanedModels.length > 0 && !cleanedModels.includes(model)) {
+    return cleanedModels;
+  }
+  return [model, ...cleanedModels.filter((item) => item !== model)];
+}
+
+const SUPPORTED_AGENT_PLATFORMS: RuntimeAgentPlatform[] = [
   'claude-code',
   'openclaw',
   'codex',
   'hermes',
   'opencode',
+  'coze',
 ];
 
 class ChatWebSocketServer {
   private wss: WebSocketServer;
   private clients: Map<string, AuthenticatedWebSocket> = new Map();
+  private sessionConversations: Map<string, string> = new Map();
+  private isShuttingDown = false;
 
   constructor(port: number = 3003) {
     this.wss = new WebSocketServer({ port });
+    this.wss.on('listening', () => {
+      console.log(`WebSocket server running on ws://localhost:${port}`);
+    });
+    this.wss.on('error', (error: NodeJS.ErrnoException) => {
+      if (error.code === 'EADDRINUSE') {
+        console.error(`WebSocket port ${port} is already in use. Stop the old backend process and restart.`);
+      } else {
+        console.error('WebSocket server error:', error);
+      }
+      process.exit(1);
+    });
     this.setupServer();
     console.log(`🔌 WebSocket server running on ws://localhost:${port}`);
   }
@@ -77,6 +150,7 @@ class ChatWebSocketServer {
     const url = new URL(req.url || '', `http://${req.headers.host}`);
     const token = url.searchParams.get('token');
     const agentId = url.searchParams.get('agentId');
+    const requestedConversationId = url.searchParams.get('conversationId') || undefined;
 
     if (!token) {
       ws.close(4001, 'Missing authentication token');
@@ -116,7 +190,19 @@ class ChatWebSocketServer {
     }
 
     ws.agentId = agentId;
-    const clientKey = `${decoded.userId}:${agentId}`;
+    if (requestedConversationId) {
+      const conversation = await getConversationById(requestedConversationId, decoded.userId);
+      if (!conversation || conversation.agentInstanceId !== agentId) {
+        ws.close(4005, 'Conversation not found or unauthorized');
+        return;
+      }
+      ws.conversationId = requestedConversationId;
+      if (conversation.sessionId) {
+        ws.sessionId = conversation.sessionId;
+      }
+    }
+
+    const clientKey = `${decoded.userId}:${agentId}:${Date.now()}:${Math.random().toString(16).slice(2)}`;
     this.clients.set(clientKey, ws);
 
     console.log(`✅ Client connected: ${clientKey}`);
@@ -128,6 +214,8 @@ class ChatWebSocketServer {
         agentId,
         agentName: agent.name,
         platform: this.getPlatformFromManifest(agent.manifest),
+        conversationId: ws.conversationId || null,
+        sessionId: ws.sessionId || null,
         status: 'ready',
       },
     });
@@ -169,7 +257,7 @@ class ChatWebSocketServer {
 
     switch (msg.type) {
       case 'start':
-        await this.handleStartSession(ws, agentId);
+        await this.handleStartSession(ws, agentId, msg.payload);
         break;
 
       case 'stop':
@@ -177,7 +265,7 @@ class ChatWebSocketServer {
         break;
 
       case 'message':
-        await this.handleChatMessage(ws, agentId, msg.payload as string);
+        await this.handleChatMessage(ws, agentId, msg.payload);
         break;
 
       case 'ping':
@@ -189,7 +277,11 @@ class ChatWebSocketServer {
     }
   }
 
-  private async handleStartSession(ws: AuthenticatedWebSocket, agentId: string): Promise<void> {
+  private getRuntimeConfig(agentId: string): {
+    agent: typeof userAgentInstances.$inferSelect;
+    platform: RuntimeAgentPlatform;
+    providerConfig?: RuntimeProviderConfig;
+  } | null {
     const db = getDb();
     const agent = db
       .select()
@@ -197,67 +289,229 @@ class ChatWebSocketServer {
       .where(eq(userAgentInstances.id, agentId))
       .get();
 
-    if (!agent) {
+    if (!agent) return null;
+
+    const platform = this.getPlatformFromManifest(agent.manifest) || 'openclaw';
+    const userConfig = readAgentUserConfig(agent);
+    const selectedModel = typeof userConfig.model === 'string' ? userConfig.model : undefined;
+    let providerConfig: RuntimeProviderConfig | undefined;
+
+    if (agent.providerId) {
+      const provider = db
+        .select()
+        .from(providers)
+        .where(eq(providers.id, agent.providerId))
+        .get();
+
+      if (provider) {
+        const modelIds = parseProviderModels(provider.models);
+        providerConfig = {
+          apiKey: provider.apiKey,
+          baseUrl: provider.baseUrl || undefined,
+          models: preferSelectedModel(modelIds, selectedModel),
+          stateDir: agent.stateDir,
+          providerType: provider.type,
+        };
+      }
+    }
+
+    return { agent, platform, providerConfig };
+  }
+
+  private getPayloadRecord(payload: ChatMessage['payload']): Record<string, unknown> | null {
+    return payload && typeof payload === 'object' && !Array.isArray(payload)
+      ? payload as Record<string, unknown>
+      : null;
+  }
+
+  private getConversationIdFromPayload(payload: ChatMessage['payload']): string | undefined {
+    const record = this.getPayloadRecord(payload);
+    return typeof record?.conversationId === 'string' && record.conversationId.trim()
+      ? record.conversationId.trim()
+      : undefined;
+  }
+
+  private getMessageContent(payload: ChatMessage['payload']): string {
+    if (typeof payload === 'string') return payload;
+    const record = this.getPayloadRecord(payload);
+    return typeof record?.content === 'string' ? record.content : '';
+  }
+
+  private async getOrCreateConversation(
+    ws: AuthenticatedWebSocket,
+    agentId: string,
+    payload?: ChatMessage['payload'],
+    title?: string
+  ): Promise<Conversation | null> {
+    const userId = ws.userId!;
+    const requestedConversationId = this.getConversationIdFromPayload(payload) || ws.conversationId;
+
+    if (requestedConversationId) {
+      const conversation = await getConversationById(requestedConversationId, userId);
+      if (!conversation || conversation.agentInstanceId !== agentId) {
+        this.sendToClient(ws, { type: 'error', payload: 'Conversation not found or unauthorized' });
+        return null;
+      }
+
+      ws.conversationId = conversation.id;
+      if (conversation.sessionId) {
+        ws.sessionId = conversation.sessionId;
+      } else {
+        ws.sessionId = undefined;
+      }
+      return conversation;
+    }
+
+    const conversation = await createConversation(userId, agentId, title || 'New session');
+    ws.conversationId = conversation.id;
+    return conversation;
+  }
+
+  private updateConversationSession(conversationId: string, sessionId: string): void {
+    const db = getDb();
+    db.update(conversations)
+      .set({ sessionId, updatedAt: new Date() })
+      .where(eq(conversations.id, conversationId))
+      .run();
+    this.sessionConversations.set(sessionId, conversationId);
+  }
+
+  private isCliPlatform(platform: RuntimeAgentPlatform): platform is AgentPlatform {
+    return platform !== 'coze';
+  }
+
+  private ensureCozeSession(ws: AuthenticatedWebSocket, conversation: Conversation): string {
+    const sessionId = ws.sessionId?.startsWith('coze_')
+      ? ws.sessionId
+      : conversation.sessionId?.startsWith('coze_')
+        ? conversation.sessionId
+        : `coze_${conversation.id}`;
+
+    if (conversation.sessionId !== sessionId) {
+      this.updateConversationSession(conversation.id, sessionId);
+    } else {
+      this.sessionConversations.set(sessionId, conversation.id);
+    }
+
+    ws.sessionId = sessionId;
+    ws.conversationId = conversation.id;
+    return sessionId;
+  }
+
+  private getCozeHistory(conversationId: string): CozeChatHistoryMessage[] {
+    const db = getDb();
+    const rows = db
+      .select({
+        role: conversationMessages.role,
+        content: conversationMessages.content,
+      })
+      .from(conversationMessages)
+      .where(eq(conversationMessages.conversationId, conversationId))
+      .orderBy(conversationMessages.createdAt)
+      .all();
+
+    return rows
+      .filter((message): message is { role: 'user' | 'assistant'; content: string } =>
+        (message.role === 'user' || message.role === 'assistant') && message.content.trim().length > 0
+      )
+      .slice(-18);
+  }
+
+  private async getOrStartRunnerSession(
+    ws: AuthenticatedWebSocket,
+    runtime: NonNullable<ReturnType<ChatWebSocketServer['getRuntimeConfig']>>,
+    conversation: Conversation
+  ) {
+    if (!this.isCliPlatform(runtime.platform)) {
+      throw new Error(`${runtime.platform} does not use a local CLI session`);
+    }
+
+    let session = conversation.sessionId ? agentRunner.getSession(conversation.sessionId) : undefined;
+
+    if (session && (session.status === 'stopped' || session.status === 'error' || session.platform !== runtime.platform)) {
+      await agentRunner.stopSession(session.sessionId);
+      session = undefined;
+    }
+
+    if (!session) {
+      session = await agentRunner.startSession(
+        runtime.agent.id,
+        runtime.platform,
+        runtime.agent.workspacePath,
+        runtime.providerConfig
+      );
+      this.updateConversationSession(conversation.id, session.sessionId);
+    } else {
+      session.providerConfig = runtime.providerConfig;
+      this.sessionConversations.set(session.sessionId, conversation.id);
+    }
+
+    ws.sessionId = session.sessionId;
+    ws.conversationId = conversation.id;
+    return session;
+  }
+
+  private async handleStartSession(
+    ws: AuthenticatedWebSocket,
+    agentId: string,
+    payload?: ChatMessage['payload']
+  ): Promise<void> {
+    const runtime = this.getRuntimeConfig(agentId);
+
+    if (!runtime) {
       this.sendToClient(ws, { type: 'error', payload: 'Agent not found' });
       return;
     }
 
-    // Check if session already exists
-    let session = agentRunner.getSessionByAgentId(agentId);
+    const conversation = await this.getOrCreateConversation(ws, agentId, payload);
+    if (!conversation) return;
 
-    if (!session) {
-      try {
-        const platform = this.getPlatformFromManifest(agent.manifest) || 'openclaw';
+    try {
+      if (runtime.platform === 'coze') {
+        const sessionId = this.ensureCozeSession(ws, conversation);
 
-        // Fetch provider config if agent has a providerId
-        let providerConfig: { apiKey: string; baseUrl?: string; models?: string[]; stateDir?: string | null } | undefined;
-        if (agent.providerId) {
-          const provider = db
-            .select()
-            .from(providers)
-            .where(eq(providers.id, agent.providerId))
-            .get();
-          if (provider) {
-            providerConfig = {
-              apiKey: provider.apiKey,
-              baseUrl: provider.baseUrl || undefined,
-              models: provider.models ? JSON.parse(provider.models) : undefined,
-              stateDir: agent.stateDir,
-            };
-          }
-        }
-
-        session = await agentRunner.startSession(
-          agentId,
-          platform as AgentPlatform,
-          agent.workspacePath,
-          providerConfig
-        );
-
-        // Update agent status
+        const db = getDb();
         db.update(userAgentInstances)
-          .set({ status: 'busy', lastActiveAt: new Date(), updatedAt: new Date() })
+          .set({ status: 'idle', lastActiveAt: new Date(), updatedAt: new Date() })
           .where(eq(userAgentInstances.id, agentId))
           .run();
 
         this.sendToClient(ws, {
           type: 'session_started',
-          payload: { sessionId: session.sessionId, platform },
+          payload: {
+            sessionId,
+            conversationId: conversation.id,
+            platform: runtime.platform,
+          },
         });
-      } catch (error) {
-        const errorMsg = error instanceof Error ? error.message : 'Failed to start session';
-        this.sendToClient(ws, { type: 'error', payload: errorMsg });
+        return;
       }
-    } else {
+
+      const session = await this.getOrStartRunnerSession(ws, runtime, conversation);
+
+      // Update agent status
+      const db = getDb();
+      db.update(userAgentInstances)
+        .set({ status: 'busy', lastActiveAt: new Date(), updatedAt: new Date() })
+        .where(eq(userAgentInstances.id, agentId))
+        .run();
+
       this.sendToClient(ws, {
         type: 'session_started',
-        payload: { sessionId: session.sessionId, platform: session.platform },
+        payload: {
+          sessionId: session.sessionId,
+          conversationId: conversation.id,
+          platform: session.platform,
+        },
       });
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : 'Failed to start session';
+      this.sendToClient(ws, { type: 'error', payload: errorMsg });
     }
   }
 
   private async handleStopSession(ws: AuthenticatedWebSocket, agentId: string): Promise<void> {
-    const session = agentRunner.getSessionByAgentId(agentId);
+    const session = ws.sessionId ? agentRunner.getSession(ws.sessionId) : undefined;
 
     if (session) {
       await agentRunner.stopSession(session.sessionId);
@@ -269,148 +523,216 @@ class ChatWebSocketServer {
       .where(eq(userAgentInstances.id, agentId))
       .run();
 
-    this.sendToClient(ws, { type: 'session_stopped', payload: { agentId } });
+    this.sendToClient(ws, {
+      type: 'session_stopped',
+      payload: { agentId, conversationId: ws.conversationId || null, sessionId: ws.sessionId || null },
+    });
   }
 
   private async handleChatMessage(
     ws: AuthenticatedWebSocket,
     agentId: string,
-    content: string
+    payload: ChatMessage['payload']
   ): Promise<void> {
+    const content = this.getMessageContent(payload);
     if (!content?.trim()) {
       this.sendToClient(ws, { type: 'error', payload: 'Empty message' });
       return;
     }
 
-    // Get or create session
-    let session = agentRunner.getSessionByAgentId(agentId);
-
-    if (!session) {
-      // Auto-start session if not running
-      const db = getDb();
-      const agent = db
-        .select()
-        .from(userAgentInstances)
-        .where(eq(userAgentInstances.id, agentId))
-        .get();
-
-      if (!agent) {
-        this.sendToClient(ws, { type: 'error', payload: 'Agent not found' });
-        return;
-      }
-
-      try {
-        const platform = this.getPlatformFromManifest(agent.manifest) || 'openclaw';
-
-        // Fetch provider config if agent has a providerId
-        let providerConfig: { apiKey: string; baseUrl?: string; models?: string[]; stateDir?: string | null } | undefined;
-        if (agent.providerId) {
-          const provider = db
-            .select()
-            .from(providers)
-            .where(eq(providers.id, agent.providerId))
-            .get();
-          if (provider) {
-            providerConfig = {
-              apiKey: provider.apiKey,
-              baseUrl: provider.baseUrl || undefined,
-              models: provider.models ? JSON.parse(provider.models) : undefined,
-              stateDir: agent.stateDir,
-            };
-          }
-        }
-
-        session = await agentRunner.startSession(
-          agentId,
-          platform as AgentPlatform,
-          agent.workspacePath,
-          providerConfig
-        );
-      } catch (error) {
-        const errorMsg = error instanceof Error ? error.message : 'Failed to start agent';
-        this.sendToClient(ws, { type: 'error', payload: errorMsg });
-        return;
-      }
+    const runtime = this.getRuntimeConfig(agentId);
+    if (!runtime) {
+      this.sendToClient(ws, { type: 'error', payload: 'Agent not found' });
+      return;
     }
 
-    // Save user message to database
-    const db = getDb();
-    
-    // Get or create conversation
-    let conv = db
-      .select()
-      .from(conversations)
-      .where(
-        and(
-          eq(conversations.agentInstanceId, agentId),
-          eq(conversations.userId, ws.userId!)
-        )
-      )
-      .orderBy()
-      .get();
+    const conversation = await this.getOrCreateConversation(
+      ws,
+      agentId,
+      payload,
+      content.substring(0, 40) || 'New session'
+    );
+    if (!conversation) return;
 
-    if (!conv) {
-      // Create new conversation
-      const convId = `conv_${Date.now()}`;
-      const now = new Date();
-      db.insert(conversations).values({
-        id: convId,
-        userId: ws.userId!,
-        agentInstanceId: agentId,
-        title: '新对话',
-        lastMessage: content.substring(0, 100),
-        messageCount: 1,
-        isPinned: false,
-        isArchived: false,
-        createdAt: now,
-        updatedAt: now,
-      }).run();
-      conv = db.select().from(conversations).where(eq(conversations.id, convId)).get()!;
+    if (runtime.platform === 'coze') {
+      await this.handleCozeChatMessage(ws, runtime, conversation, content);
+      return;
     }
 
-    // Save user message
-    const msgId = `msg_${Date.now()}`;
-    db.insert(messages).values({
-      id: msgId,
-      conversationId: conv.id,
-      role: 'user',
-      content,
-      metadata: JSON.stringify({ source: 'websocket' }),
-      createdAt: new Date(),
-    }).run();
+    let session;
+    try {
+      session = await this.getOrStartRunnerSession(ws, runtime, conversation);
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : 'Failed to start agent';
+      this.sendToClient(ws, { type: 'error', payload: errorMsg });
+      return;
+    }
 
-    // Update conversation
-    db.update(conversations)
-      .set({
-        lastMessage: content.substring(0, 200),
-        messageCount: conv.messageCount + 1,
-        updatedAt: new Date(),
-      })
-      .where(eq(conversations.id, conv.id))
-      .run();
+    const userMessage = await addMessage(conversation.id, 'user', content, {
+      source: 'websocket',
+      sessionId: session.sessionId,
+      conversationId: conversation.id,
+    });
+
+    const runtimeContent = buildAgentRuntimePrompt(runtime.agent, {
+      userMessage: content,
+      mode: 'direct-chat',
+      platform: runtime.platform,
+      providerConfig: runtime.providerConfig,
+      extraInstructions: [
+        `Conversation id: ${conversation.id}`,
+        `Runner session id: ${session.sessionId}`,
+        'The saved user message is the content inside [USER_MESSAGE]. Do not treat the runtime context as user-authored text.',
+      ],
+    });
 
     // Send message to agent
-    const sent = agentRunner.sendMessage(session.sessionId, content);
+    const sent = agentRunner.sendMessage(session.sessionId, runtimeContent);
 
     if (!sent) {
       this.sendToClient(ws, { type: 'error', payload: 'Failed to send message to agent' });
+      return;
+    }
+
+    this.sendToClient(ws, {
+      type: 'message_saved',
+      payload: {
+        messageId: userMessage.id,
+        conversationId: conversation.id,
+        sessionId: session.sessionId,
+      },
+    });
+  }
+
+  private async handleCozeChatMessage(
+    ws: AuthenticatedWebSocket,
+    runtime: NonNullable<ReturnType<ChatWebSocketServer['getRuntimeConfig']>>,
+    conversation: Conversation,
+    content: string
+  ): Promise<void> {
+    const userId = ws.userId!;
+    const sessionId = this.ensureCozeSession(ws, conversation);
+    const db = getDb();
+
+    const userMessage = await addMessage(conversation.id, 'user', content, {
+      source: 'websocket',
+      runtime: 'coze',
+      sessionId,
+      conversationId: conversation.id,
+    });
+
+    this.sendToClient(ws, {
+      type: 'message_saved',
+      payload: {
+        messageId: userMessage.id,
+        conversationId: conversation.id,
+        sessionId,
+      },
+    });
+
+    db.update(userAgentInstances)
+      .set({ status: 'busy', lastActiveAt: new Date(), updatedAt: new Date() })
+      .where(eq(userAgentInstances.id, runtime.agent.id))
+      .run();
+
+    try {
+      const history = this.getCozeHistory(conversation.id);
+      const runtimeContent = buildAgentRuntimePrompt(runtime.agent, {
+        userMessage: content,
+        mode: 'direct-chat',
+        platform: runtime.platform,
+        extraInstructions: [
+          `Conversation id: ${conversation.id}`,
+          `Runner session id: ${sessionId}`,
+          'The saved user message is the content inside [USER_MESSAGE]. Do not treat the runtime context as user-authored text.',
+        ],
+      });
+      const responseContent = await executeCozeAgentTurn(runtime.agent, {
+        userId,
+        conversationId: conversation.id,
+        message: runtimeContent,
+        history,
+      });
+
+      const savedMessage = await addMessage(conversation.id, 'assistant', responseContent, {
+        source: 'coze',
+        sessionId,
+        conversationId: conversation.id,
+        outputType: 'output',
+      });
+
+      this.sendToClient(ws, {
+        type: 'agent_output',
+        payload: {
+          content: responseContent,
+          outputType: 'output',
+          sessionId,
+          conversationId: conversation.id,
+          messageId: savedMessage.id,
+          timestamp: new Date().toISOString(),
+        },
+      });
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Coze Agent 调用失败';
+      const savedMessage = await addMessage(conversation.id, 'system', errorMessage, {
+        source: 'coze',
+        sessionId,
+        conversationId: conversation.id,
+        outputType: 'error',
+      });
+
+      this.sendToClient(ws, {
+        type: 'agent_output',
+        payload: {
+          content: errorMessage,
+          outputType: 'error',
+          sessionId,
+          conversationId: conversation.id,
+          messageId: savedMessage.id,
+          timestamp: new Date().toISOString(),
+        },
+      });
+    } finally {
+      db.update(userAgentInstances)
+        .set({ status: 'idle', updatedAt: new Date() })
+        .where(eq(userAgentInstances.id, runtime.agent.id))
+        .run();
     }
   }
 
   private setupAgentEvents(): void {
     // Forward agent responses to clients
-    agentRunner.on('response', ({ sessionId, response }) => {
+    agentRunner.on('response', async ({ sessionId, response }) => {
       const session = agentRunner.getSession(sessionId);
       if (!session) return;
+      const conversationId = this.sessionConversations.get(sessionId);
+      let messageId: string | undefined;
 
-      // Find client by agentId (format: userId:agentId)
-      for (const [key, ws] of this.clients) {
-        if (key.endsWith(`:${session.agentId}`)) {
+      if (conversationId && response.content?.trim() && response.type !== 'done') {
+        const savedMessage = await addMessage(
+          conversationId,
+          response.type === 'error' ? 'system' : 'assistant',
+          response.content,
+          {
+            source: 'agent-runner',
+            sessionId,
+            conversationId,
+            outputType: response.type,
+          }
+        );
+        messageId = savedMessage.id;
+      }
+
+      for (const ws of this.clients.values()) {
+        if (ws.sessionId === sessionId) {
           this.sendToClient(ws, {
             type: 'agent_output',
             payload: {
               content: response.content,
               outputType: response.type,
+              sessionId,
+              conversationId: conversationId || ws.conversationId || null,
+              messageId: messageId || null,
               timestamp: response.timestamp.toISOString(),
             },
           });
@@ -430,14 +752,16 @@ class ChatWebSocketServer {
         .run();
 
       // Notify client
-      for (const [key, ws] of this.clients) {
-        if (key.endsWith(`:${session.agentId}`)) {
+      const conversationId = this.sessionConversations.get(sessionId);
+      for (const ws of this.clients.values()) {
+        if (ws.sessionId === sessionId) {
           this.sendToClient(ws, {
             type: 'session_ended',
-            payload: { exitCode },
+            payload: { exitCode, sessionId, conversationId: conversationId || null },
           });
         }
       }
+      this.sessionConversations.delete(sessionId);
     });
   }
 
@@ -447,7 +771,7 @@ class ChatWebSocketServer {
     }
   }
 
-  private getPlatformFromManifest(manifestJson: string): AgentPlatform | null {
+  private getPlatformFromManifest(manifestJson: string): RuntimeAgentPlatform | null {
     try {
       const manifest = JSON.parse(manifestJson);
       const type = manifest?.entrypoint?.type;
@@ -479,15 +803,30 @@ class ChatWebSocketServer {
    * Shutdown server
    */
   async shutdown(): Promise<void> {
+    if (this.isShuttingDown) return;
+    this.isShuttingDown = true;
+
     // Stop all agent sessions
     await agentRunner.stopAll();
 
     // Close all connections
     this.wss.clients.forEach((client) => {
-      client.close();
+      client.terminate();
     });
 
-    this.wss.close();
+    await new Promise<void>((resolve, reject) => {
+      this.wss.close((error?: Error) => {
+        if (error && !error.message.includes('not running')) {
+          reject(error);
+          return;
+        }
+        resolve();
+      });
+    });
+
+    this.clients.clear();
+    this.sessionConversations.clear();
+    chatServer = null;
     console.log('WebSocket server shut down');
   }
 }

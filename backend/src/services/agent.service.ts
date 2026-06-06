@@ -1,9 +1,11 @@
 import fs from 'fs';
 import path from 'path';
-import { eq, and, desc } from 'drizzle-orm';
+import { eq, and, desc, isNull } from 'drizzle-orm';
 import { getDb } from '../db/index.js';
 import {
   userAgentInstances,
+  marketAgents,
+  providers,
   caves,
   conversations,
   messages,
@@ -21,6 +23,7 @@ import {
   getAgentBaselinePath,
   getAgentConversationsPath,
   getUserAgentsRoot,
+  resolveStoredPath,
   generateAgentKey,
   cloneDirectory,
   writeFile,
@@ -35,6 +38,70 @@ function generateId(): string {
   const bytes = new Uint8Array(16);
   crypto.getRandomValues(bytes);
   return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+const PLATFORM_TO_PROVIDER_TYPE: Record<string, string> = {
+  'claude-code': 'claude',
+  codex: 'codex',
+  hermes: 'hermes',
+  opencode: 'opencode',
+  openclaw: 'openclaw',
+};
+
+function getPlatformFromManifest(manifestJson?: string): string | null {
+  if (!manifestJson) return null;
+  try {
+    const manifest = JSON.parse(manifestJson);
+    return typeof manifest?.entrypoint?.type === 'string' ? manifest.entrypoint.type : null;
+  } catch {
+    return null;
+  }
+}
+
+export interface AgentUserConfig {
+  agentId?: string;
+  name?: string;
+  description?: string;
+  platform?: string | null;
+  avatar?: string;
+  providerId?: string | null;
+  apiKeys?: Record<string, string>;
+  model?: string;
+  temperature?: number;
+  maxTokens?: number;
+  updatedAt?: string;
+}
+
+export function readAgentUserConfig(agent: Pick<UserAgentInstance, 'workspacePath'>): AgentUserConfig {
+  const configPath = path.join(resolveStoredPath(agent.workspacePath), 'agent.config.json');
+  if (!fs.existsSync(configPath)) return {};
+  try {
+    const parsed = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function normalizeModelId(model: unknown): string {
+  if (typeof model === 'string') return model;
+  if (model && typeof model === 'object') {
+    const value = model as { id?: unknown; name?: unknown };
+    if (typeof value.id === 'string') return value.id;
+    if (typeof value.name === 'string') return value.name;
+  }
+  return '';
+}
+
+function parseProviderModels(rawModels?: string | null): string[] {
+  if (!rawModels) return [];
+  try {
+    const parsed = JSON.parse(rawModels);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.map(normalizeModelId).filter(Boolean);
+  } catch {
+    return [];
+  }
 }
 
 // ==================== AGENTS ====================
@@ -54,6 +121,29 @@ export interface AgentWithConversations extends UserAgentInstance {
   conversationList?: Conversation[];
 }
 
+export class AgentProfileLockedError extends Error {
+  constructor() {
+    super('从 Agent 市场下载的他人 Agent 不能修改名称和介绍');
+    this.name = 'AgentProfileLockedError';
+  }
+}
+
+export async function canEditAgentProfile(
+  agent: Pick<UserAgentInstance, 'sourceMarketAgentId'>,
+  userId: string
+): Promise<boolean> {
+  if (!agent.sourceMarketAgentId) return true;
+
+  const db = getDb();
+  const source = db
+    .select({ ownerUserId: marketAgents.ownerUserId })
+    .from(marketAgents)
+    .where(eq(marketAgents.id, agent.sourceMarketAgentId))
+    .get();
+
+  return !source || source.ownerUserId === userId;
+}
+
 export async function createAgent(
   userId: string,
   dto: CreateAgentDto
@@ -62,6 +152,21 @@ export async function createAgent(
   const now = new Date();
   const agentId = generateId();
   const agentKey = generateAgentKey();
+  const sourceMarketAgent = dto.sourceMarketAgentId
+    ? db
+        .select({
+          id: marketAgents.id,
+          name: marketAgents.name,
+          description: marketAgents.description,
+          ownerUserId: marketAgents.ownerUserId,
+          latestVersion: marketAgents.latestVersion,
+          icon: marketAgents.icon,
+        })
+        .from(marketAgents)
+        .where(eq(marketAgents.id, dto.sourceMarketAgentId))
+        .get()
+    : null;
+  const shouldLockSourceProfile = Boolean(sourceMarketAgent && sourceMarketAgent.ownerUserId !== userId);
 
   // Create workspace directory
   const workspacePath = getAgentWorkspacePath(userId, agentId);
@@ -81,11 +186,11 @@ export async function createAgent(
   const newAgent: NewUserAgentInstance = {
     id: agentId,
     userId,
-    sourceMarketAgentId: dto.sourceMarketAgentId || null,
-    sourceVersion: dto.sourceVersion || '1.0.0',
-    name: dto.name,
-    description: dto.description || '',
-    avatar: dto.avatar || '',
+    sourceMarketAgentId: sourceMarketAgent?.id || null,
+    sourceVersion: dto.sourceVersion || sourceMarketAgent?.latestVersion || '1.0.0',
+    name: shouldLockSourceProfile ? sourceMarketAgent!.name : dto.name,
+    description: shouldLockSourceProfile ? sourceMarketAgent!.description : dto.description || '',
+    avatar: dto.avatar || (shouldLockSourceProfile ? sourceMarketAgent!.icon || '' : ''),
     agentKey,
     workspacePath,
     baselineSnapshotPath: baselinePath,
@@ -155,7 +260,7 @@ export async function getUnassignedAgents(userId: string): Promise<UserAgentInst
   return db
     .select()
     .from(userAgentInstances)
-    .where(and(eq(userAgentInstances.userId, userId), eq(userAgentInstances.caveId, null)))
+    .where(and(eq(userAgentInstances.userId, userId), isNull(userAgentInstances.caveId)))
     .orderBy(desc(userAgentInstances.updatedAt))
     .all();
 }
@@ -171,6 +276,13 @@ export async function updateAgent(
 
   const now = new Date();
   const updateData: Record<string, unknown> = { updatedAt: now };
+  const isProfileChange =
+    (updates.name !== undefined && updates.name !== existing.name) ||
+    (updates.description !== undefined && updates.description !== existing.description);
+
+  if (isProfileChange && !(await canEditAgentProfile(existing, userId))) {
+    throw new AgentProfileLockedError();
+  }
 
   if (updates.name !== undefined) updateData.name = updates.name;
   if (updates.description !== undefined) updateData.description = updates.description;
@@ -206,7 +318,7 @@ export async function deleteAgent(agentId: string, userId: string): Promise<bool
   if (!existing) return false;
 
   // Delete workspace directory
-  deleteDirectory(existing.workspacePath);
+  deleteDirectory(resolveStoredPath(existing.workspacePath));
 
   // Delete from database
   db.delete(userAgentInstances).where(eq(userAgentInstances.id, agentId)).run();
@@ -218,60 +330,136 @@ export async function updateAgentConfig(
   userId: string,
   config: {
     name?: string;
+    description?: string;
     platform?: string;
     avatar?: string;
-    providerId?: string;
+    providerId?: string | null;
     apiKeys?: Record<string, string>;
     model?: string;
     temperature?: number;
     maxTokens?: number;
   }
-): Promise<boolean> {
+): Promise<UserAgentInstance | null> {
   const existing = await getAgentByIdAndUser(agentId, userId);
-  if (!existing) return false;
+  if (!existing) return null;
+
+  const db = getDb();
+  const previousConfig = readAgentUserConfig(existing);
+  const canEditProfile = await canEditAgentProfile(existing, userId);
+
+  if (
+    !canEditProfile &&
+    ((config.name !== undefined && config.name !== existing.name) ||
+      (config.description !== undefined && config.description !== existing.description))
+  ) {
+    throw new AgentProfileLockedError();
+  }
+
+  const platform = config.platform || previousConfig.platform || getPlatformFromManifest(existing.manifest) || 'openclaw';
+  const targetProviderId =
+    config.providerId !== undefined
+      ? config.providerId
+      : previousConfig.providerId ?? existing.providerId ?? null;
+  let targetProvider: typeof providers.$inferSelect | undefined;
+
+  if (targetProviderId) {
+    const provider = db
+      .select()
+      .from(providers)
+      .where(and(eq(providers.id, targetProviderId), eq(providers.userId, userId)))
+      .get();
+
+    if (!provider) {
+      console.error(`Provider not found or unauthorized: ${targetProviderId}`);
+      return null;
+    }
+
+    const expectedProviderType = PLATFORM_TO_PROVIDER_TYPE[platform];
+    if (expectedProviderType && provider.type !== expectedProviderType) {
+      console.error(
+        `Provider type mismatch for agent ${agentId}: platform ${platform} requires ${expectedProviderType}, got ${provider.type}`
+      );
+      return null;
+    }
+
+    targetProvider = provider;
+  }
+
+  const requestedModel = config.model !== undefined ? config.model.trim() : undefined;
+  const previousProviderId = previousConfig.providerId ?? existing.providerId ?? null;
+  const previousModel = previousConfig.model || undefined;
+  if (requestedModel && targetProvider) {
+    const providerModels = parseProviderModels(targetProvider.models);
+    if (providerModels.length > 0 && !providerModels.includes(requestedModel)) {
+      console.error(`Model ${requestedModel} is not configured for provider ${targetProvider.id}`);
+      return null;
+    }
+  }
 
   // Write user config to workspace directory (does not affect market agent)
-  const configPath = path.join(existing.workspacePath, 'agent.config.json');
-  const userConfig = {
+  const workspacePath = resolveStoredPath(existing.workspacePath);
+  const configPath = path.join(workspacePath, 'agent.config.json');
+  const userConfig: AgentUserConfig = {
+    ...previousConfig,
     agentId,
-    name: config.name ?? existing.name,
-    platform: config.platform ?? existing.platform,
-    avatar: config.avatar,
-    providerId: config.providerId,
-    apiKeys: config.apiKeys,
-    model: config.model,
-    temperature: config.temperature,
-    maxTokens: config.maxTokens,
+    name: canEditProfile ? config.name ?? existing.name : existing.name,
+    description: canEditProfile ? config.description ?? existing.description ?? undefined : existing.description ?? undefined,
+    platform,
+    avatar: config.avatar ?? previousConfig.avatar,
+    providerId: targetProviderId,
+    apiKeys: config.apiKeys ?? previousConfig.apiKeys,
+    model: config.model !== undefined ? requestedModel || undefined : previousConfig.model,
+    temperature: config.temperature ?? previousConfig.temperature,
+    maxTokens: config.maxTokens ?? previousConfig.maxTokens,
     updatedAt: new Date().toISOString(),
   };
   
   try {
-    fs.writeFileSync(configPath, JSON.stringify(userConfig, null, 2), 'utf-8');
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    const compactConfig = Object.fromEntries(
+      Object.entries(userConfig).filter(([, value]) => value !== undefined)
+    );
+    fs.writeFileSync(configPath, JSON.stringify(compactConfig, null, 2), 'utf-8');
   } catch (error) {
     console.error('Failed to write agent config:', error);
-    return false;
+    return null;
   }
 
   // Update database if name or providerId changed
-  const db = getDb();
   const updateData: Record<string, unknown> = { updatedAt: new Date() };
 
-  if (config.name && config.name !== existing.name) {
+  if (canEditProfile && config.name && config.name !== existing.name) {
     updateData.name = config.name;
+  }
+
+  if (canEditProfile && config.description !== undefined && config.description !== existing.description) {
+    updateData.description = config.description;
   }
 
   if (config.providerId !== undefined) {
     updateData.providerId = config.providerId || null;
   }
 
-  if (config.name || config.providerId !== undefined) {
+  if ((canEditProfile && (config.name || config.description !== undefined)) || config.providerId !== undefined) {
     db.update(userAgentInstances)
       .set(updateData)
       .where(eq(userAgentInstances.id, agentId))
       .run();
   }
 
-  return true;
+  const providerChanged =
+    config.providerId !== undefined && (config.providerId || null) !== (previousProviderId || null);
+  const modelChanged =
+    config.model !== undefined && (requestedModel || undefined) !== (previousModel || undefined);
+
+  if (providerChanged || modelChanged) {
+    db.update(conversations)
+      .set({ sessionId: null, updatedAt: new Date() })
+      .where(and(eq(conversations.agentInstanceId, agentId), eq(conversations.userId, userId)))
+      .run();
+  }
+
+  return getAgentByIdAndUser(agentId, userId);
 }
 
 export async function uploadAgentAvatar(
@@ -295,8 +483,8 @@ export async function uploadAgentAvatar(
   
   fs.writeFileSync(avatarPath, file.buffer);
 
-  // Update avatar URL in database (relative path for serving)
-  const avatarUrl = `http://localhost:3002/api/agents/${agentId}/avatar/${filename}`;
+  // Store a relative API URL so it survives non-localhost deployments.
+  const avatarUrl = `/api/agents/${agentId}/avatar/${filename}`;
   const db = getDb();
   db.update(userAgentInstances)
     .set({ avatar: avatarUrl, updatedAt: new Date() })
@@ -410,7 +598,8 @@ export async function deleteCave(caveId: string, userId: string): Promise<boolea
 export async function createConversation(
   userId: string,
   agentInstanceId: string,
-  title?: string
+  title?: string,
+  sessionId?: string | null
 ): Promise<Conversation> {
   const db = getDb();
   const now = new Date();
@@ -420,6 +609,7 @@ export async function createConversation(
     id: convId,
     userId,
     agentInstanceId,
+    sessionId: sessionId || null,
     title: title || '新对话',
     lastMessage: '',
     messageCount: 0,
@@ -498,6 +688,29 @@ export async function deleteConversation(conversationId: string, userId: string)
   // Delete conversation
   db.delete(conversations).where(eq(conversations.id, conversationId)).run();
   return true;
+}
+
+export async function updateConversationTitle(
+  conversationId: string,
+  userId: string,
+  title: string
+): Promise<Conversation | null> {
+  const db = getDb();
+  const existing = await getConversationById(conversationId, userId);
+  if (!existing) return null;
+
+  const nextTitle = title.trim();
+  const now = new Date();
+  db.update(conversations)
+    .set({ title: nextTitle, updatedAt: now })
+    .where(and(eq(conversations.id, conversationId), eq(conversations.userId, userId)))
+    .run();
+
+  return {
+    ...existing,
+    title: nextTitle,
+    updatedAt: now,
+  };
 }
 
 // ==================== MESSAGES ====================

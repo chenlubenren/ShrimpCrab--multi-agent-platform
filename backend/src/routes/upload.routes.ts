@@ -14,8 +14,11 @@ router.use(authMiddleware);
 interface UploadBody {
   name?: string;
   publishToMarket?: boolean;
+  deferMarketPublish?: boolean;
   uploadType?: 'folder' | 'zip';
   agentType?: string;
+  description?: string;
+  avatar?: string;
   file?: string;
   fileName?: string;
   files?: FolderFileInput[];
@@ -27,7 +30,17 @@ router.post('/', async (req: AuthenticatedRequest, res: Response) => {
     const userId = req.user!.userId;
     const body = req.body as UploadBody;
 
-    const { name, publishToMarket: shouldPublish = false, uploadType = 'zip', file, files, agentType } = body;
+    const {
+      name,
+      publishToMarket: shouldPublish = false,
+      deferMarketPublish = false,
+      uploadType = 'zip',
+      file,
+      files,
+      agentType,
+      description,
+      avatar,
+    } = body;
 
     if (!name || typeof name !== 'string' || !name.trim()) {
       res.status(400).json({ message: '请提供 Agent 名称' });
@@ -35,6 +48,10 @@ router.post('/', async (req: AuthenticatedRequest, res: Response) => {
     }
 
     const agentName = name.trim();
+    const metadata = {
+      description: typeof description === 'string' ? description : undefined,
+      avatar: typeof avatar === 'string' ? avatar : undefined,
+    };
 
     // 文件夹上传
     if (uploadType === 'folder') {
@@ -43,21 +60,29 @@ router.post('/', async (req: AuthenticatedRequest, res: Response) => {
         return;
       }
 
-      const result = await processFolderUpload(userId, files, agentName, agentType, shouldPublish);
+      const result = await processFolderUpload(
+        userId,
+        files,
+        agentName,
+        agentType,
+        shouldPublish && !deferMarketPublish,
+        metadata
+      );
 
       if (!result.success) {
         res.status(400).json({ message: result.error || '上传失败' });
         return;
       }
 
+      let marketAgentId: string | undefined;
       // Publish to market if requested
-      if (shouldPublish && result.agentId) {
-        try {
-          await publishToMarket(userId, result.agentId, agentName, result.manifest);
-        } catch (marketError) {
-          console.error('Failed to publish to market:', marketError);
-          // Don't fail the upload if market publish fails
+      if (shouldPublish && result.agentId && !deferMarketPublish) {
+        const marketResult = await publishToMarket(userId, result.agentId, agentName, result.manifest);
+        if (!marketResult.success) {
+          res.status(400).json({ message: marketResult.error || '发布到市场失败' });
+          return;
         }
+        marketAgentId = marketResult.marketAgentId;
       }
 
       res.json({
@@ -68,7 +93,9 @@ router.post('/', async (req: AuthenticatedRequest, res: Response) => {
         workspacePath: result.workspacePath,
         fileCount: result.fileCount,
         agentType: result.agentType,
-        publishedToMarket: shouldPublish,
+        publishedToMarket: Boolean(marketAgentId),
+        publishDeferred: shouldPublish && deferMarketPublish,
+        marketAgentId,
       });
       return;
     }
@@ -80,20 +107,29 @@ router.post('/', async (req: AuthenticatedRequest, res: Response) => {
     }
 
     const buffer = Buffer.from(file, 'base64');
-    const result = await processZipUpload(userId, buffer, agentName, agentType, shouldPublish);
+    const result = await processZipUpload(
+      userId,
+      buffer,
+      agentName,
+      agentType,
+      shouldPublish && !deferMarketPublish,
+      metadata
+    );
 
     if (!result.success) {
       res.status(400).json({ message: result.error || '上传失败' });
       return;
     }
 
+    let marketAgentId: string | undefined;
     // Publish to market if requested
-    if (shouldPublish && result.agentId) {
-      try {
-        await publishToMarket(userId, result.agentId, agentName, result.manifest);
-      } catch (marketError) {
-        console.error('Failed to publish to market:', marketError);
+    if (shouldPublish && result.agentId && !deferMarketPublish) {
+      const marketResult = await publishToMarket(userId, result.agentId, agentName, result.manifest);
+      if (!marketResult.success) {
+        res.status(400).json({ message: marketResult.error || '发布到市场失败' });
+        return;
       }
+      marketAgentId = marketResult.marketAgentId;
     }
 
     res.json({
@@ -104,7 +140,9 @@ router.post('/', async (req: AuthenticatedRequest, res: Response) => {
       workspacePath: result.workspacePath,
       fileCount: result.fileCount,
       agentType: result.agentType,
-      publishedToMarket: shouldPublish,
+      publishedToMarket: Boolean(marketAgentId),
+      publishDeferred: shouldPublish && deferMarketPublish,
+      marketAgentId,
     });
   } catch (error) {
     console.error('Upload error:', error);

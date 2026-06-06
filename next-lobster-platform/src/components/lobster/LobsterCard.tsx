@@ -1,21 +1,98 @@
+'use client';
+
+import { useEffect, useState } from 'react';
 import { Lobster } from '@/types';
-import { motion, AnimatePresence } from 'framer-motion';
 import { PixelCard } from '@/components/ui/PixelCard';
 import { LobsterSprite } from './LobsterSprite';
 import { useRouter } from 'next/navigation';
-import { useState, useRef, useEffect } from 'react';
+import * as api from '@/lib/api';
+import { hasConfiguredProvider } from '@/lib/agentProvider';
 
 interface LobsterCardProps {
   lobster: Lobster;
   silhouette?: boolean;
-  onDelete?: (id: string) => void;
+  onDelete?: (id: string) => Promise<void> | void;
   onConfig?: (lobster: Lobster) => void;
+  onChanged?: () => Promise<void> | void;
+  onForum?: (lobster: Lobster) => void;
 }
 
-export function LobsterCard({ lobster, silhouette = false, onDelete, onConfig }: LobsterCardProps) {
+type BusyAction = 'delete' | 'market' | null;
+
+function getPlatformConfig(platform?: string | null) {
+  const key = (platform || 'openclaw').toLowerCase();
+  if (key.includes('claude')) {
+    return {
+      label: 'Claude Code',
+      iconUrl: '/agent-icons/claude-code.svg',
+    };
+  }
+  if (key.includes('codex')) {
+    return {
+      label: 'Codex',
+      iconUrl: '/agent-icons/codex.svg',
+    };
+  }
+  if (key.includes('opencode')) {
+    return {
+      label: 'OpenCode',
+      iconUrl: '/agent-icons/opencode.svg',
+    };
+  }
+  if (key.includes('coze')) {
+    return {
+      label: 'Coze',
+      iconUrl: '/agent-icons/coze.svg',
+    };
+  }
+  if (key.includes('hermes')) {
+    return {
+      label: 'Hermes',
+      iconUrl: '/agent-icons/hermes.svg',
+    };
+  }
+  return {
+    label: 'OpenClaw',
+    iconUrl: '/agent-icons/openclaw.svg',
+  };
+}
+
+function PlatformIcon({ platform }: { platform?: string | null }) {
+  const config = getPlatformConfig(platform);
+
+  return (
+    <div
+      className="w-7 h-7 flex items-center justify-center overflow-hidden"
+      title={config.label}
+      aria-label={config.label}
+    >
+      <img
+        src={config.iconUrl}
+        alt={config.label}
+        className="w-full h-full object-contain"
+      />
+    </div>
+  );
+}
+
+export function LobsterCard({
+  lobster,
+  silhouette = false,
+  onDelete,
+  onConfig,
+  onChanged,
+  onForum,
+}: LobsterCardProps) {
   const router = useRouter();
-  const [showMenu, setShowMenu] = useState(false);
-  const menuRef = useRef<HTMLDivElement>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [busyAction, setBusyAction] = useState<BusyAction>(null);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    const closeMenu = () => setMenuOpen(false);
+    window.addEventListener('click', closeMenu);
+    return () => window.removeEventListener('click', closeMenu);
+  }, [menuOpen]);
 
   const handleClick = () => {
     if (!silhouette) {
@@ -23,93 +100,171 @@ export function LobsterCard({ lobster, silhouette = false, onDelete, onConfig }:
     }
   };
 
-  const handleMenuClick = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    e.preventDefault();
-    setShowMenu(!showMenu);
-  };
+  const handleDelete = async () => {
+    if (busyAction || silhouette) return;
+    const confirmed = window.confirm(`确定删除「${lobster.name}」吗？`);
+    if (!confirmed) return;
 
-  const handleDelete = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    e.preventDefault();
-    if (onDelete && confirm(`确定要删除 Agent "${lobster.name}" 吗？此操作不可恢复。`)) {
-      onDelete(lobster.id);
+    try {
+      setBusyAction('delete');
+      await onDelete?.(lobster.id);
+      await onChanged?.();
+    } catch (error) {
+      alert(error instanceof Error ? error.message : '删除 agent 失败');
+    } finally {
+      setBusyAction(null);
+      setMenuOpen(false);
     }
-    setShowMenu(false);
   };
 
-  const handleConfig = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    e.preventDefault();
+  const handleMarketToggle = async () => {
+    if (busyAction || silhouette) return;
+    const actionLabel = lobster.isPublishedToMarket ? '下架' : '上架';
+    const confirmed = window.confirm(
+      lobster.isPublishedToMarket
+        ? `确定将「${lobster.name}」从 agent 市场下架吗？`
+        : `确定将「${lobster.name}」上架到 agent 市场吗？`
+    );
+    if (!confirmed) return;
+
+    try {
+      setBusyAction('market');
+      if (lobster.isPublishedToMarket) {
+        await api.unpublishAgentFromMarket(lobster.id);
+      } else {
+        await api.publishAgentToMarket(lobster.id);
+      }
+      await onChanged?.();
+    } catch (error) {
+      alert(error instanceof Error ? error.message : `${actionLabel}到 agent 市场失败`);
+    } finally {
+      setBusyAction(null);
+      setMenuOpen(false);
+    }
+  };
+
+  const handleForum = () => {
+    if (onForum) {
+      onForum(lobster);
+      setMenuOpen(false);
+      return;
+    }
+    router.push(`/market?tab=social&agentId=${encodeURIComponent(lobster.id)}`);
+    setMenuOpen(false);
+  };
+
+  const handleEditProfile = () => {
+    if (busyAction || silhouette) return;
+    setMenuOpen(false);
     if (onConfig) {
       onConfig(lobster);
+      return;
     }
-    setShowMenu(false);
+    router.push(`/agent/${lobster.id}/setup`);
   };
 
-  useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        setShowMenu(false);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
+  const description = lobster.description?.trim() || lobster.role || '暂无介绍';
+  const ownerName = lobster.ownerUsername || lobster.uploaderUsername || '当前用户';
+  const platform = lobster.platform || lobster.config?.platform || 'openclaw';
+  const providerConfigured = hasConfiguredProvider(lobster);
 
   return (
-    <PixelCard onClick={handleClick} className={`w-full h-full min-h-[300px] flex flex-col ${silhouette ? 'pointer-events-none' : ''}`}>
-      {/* Three dots menu button - right side */}
-      {!silhouette && (
-        <div className="absolute top-2 right-2 z-10" ref={menuRef}>
-          <button
-            onClick={handleMenuClick}
-            className="w-8 h-8 rounded-full bg-pixel-white/80 border-2 border-pixel-black flex items-center justify-center hover:bg-pixel-yellow transition-colors"
-            style={{ boxShadow: '2px 2px 0px 0px #101010' }}
-          >
-            <span className="font-bold text-pixel-black">⋮</span>
-          </button>
-          <AnimatePresence>
-            {showMenu && (
-              <motion.div
-                initial={{ opacity: 0, scale: 0.9 }}
-                animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: 0.9 }}
-                className="absolute top-10 right-0 bg-pixel-white border-4 border-pixel-black shadow-lg z-20 w-max"
-                style={{ boxShadow: '4px 4px 0px 0px #101010' }}
-              >
-                {onConfig && (
-                  <button
-                    onClick={handleConfig}
-                    className="w-full px-3 py-2 font-pixel text-sm text-left hover:bg-pixel-blue/20 text-pixel-black flex items-center gap-2 transition-colors whitespace-nowrap"
-                  >
-                    <span>⚙️</span>
-                    <span>配置Agent</span>
-                  </button>
-                )}
-                  <button
-                    onClick={handleDelete}
-                    className="w-full px-3 py-2 font-pixel text-sm text-left hover:bg-pixel-red/20 text-pixel-black flex items-center gap-2 transition-colors whitespace-nowrap"
-                  >
-                    <span>🗑️</span>
-                    <span>删除此Agent</span>
-                  </button>
-              </motion.div>
-            )}
-          </AnimatePresence>
+    <PixelCard
+      onClick={handleClick}
+      hoverable={!silhouette && providerConfigured}
+      className={`group/lobster-card relative w-full h-full min-h-[360px] md:min-h-[320px] flex flex-col ${silhouette ? 'pointer-events-none' : ''}`}
+    >
+      {lobster.isPublishedToMarket && !silhouette && (
+        <div className="absolute top-2 left-2 z-20 px-2.5 py-1.5 md:px-2 md:py-1 bg-pixel-yellow text-pixel-black border-2 border-pixel-black font-pixel text-sm md:text-[10px] font-bold">
+          已上架
         </div>
       )}
-      <div className="flex flex-col items-center gap-3 flex-1 justify-between pt-8">
-        <LobsterSprite lobster={lobster} size="lg" silhouette={silhouette} />
+
+      {!silhouette && (
+        <div className={`absolute top-2 right-2 z-30 transition-opacity duration-150 ${menuOpen ? 'opacity-100' : 'opacity-0 group-hover/lobster-card:opacity-100 group-focus-within/lobster-card:opacity-100'}`}>
+          <button
+            type="button"
+            aria-label="agent 操作菜单"
+            className="w-11 h-11 md:w-8 md:h-8 bg-transparent text-pixel-black/65 border-0 font-pixel text-2xl md:text-xl leading-none font-bold hover:text-pixel-black hover:bg-pixel-black/5 focus:outline-none focus:text-pixel-black"
+            onClick={(event) => {
+              event.stopPropagation();
+              setMenuOpen((open) => !open);
+            }}
+            disabled={busyAction !== null}
+          >
+            ...
+          </button>
+
+          {menuOpen && (
+            <div
+              className="absolute right-0 mt-2 w-72 md:w-56 bg-pixel-white border-2 border-pixel-black py-1"
+              style={{ boxShadow: '4px 4px 0px 0px #101010' }}
+              onClick={(event) => event.stopPropagation()}
+            >
+              <button
+                type="button"
+                className="w-full px-4 py-3 md:px-3 md:py-2 text-left font-pixel text-base md:text-xs text-pixel-black hover:bg-pixel-yellow disabled:opacity-50"
+                onClick={handleEditProfile}
+                disabled={busyAction !== null}
+              >
+                更改 agent 形象与介绍
+              </button>
+              <button
+                type="button"
+                className="w-full px-4 py-3 md:px-3 md:py-2 text-left font-pixel text-base md:text-xs text-pixel-black hover:bg-pixel-yellow disabled:opacity-50"
+                onClick={handleDelete}
+                disabled={busyAction !== null || !onDelete}
+              >
+                删除此 agent
+              </button>
+              <button
+                type="button"
+                className="w-full px-4 py-3 md:px-3 md:py-2 text-left font-pixel text-base md:text-xs text-pixel-black hover:bg-pixel-yellow disabled:opacity-50"
+                onClick={handleMarketToggle}
+                disabled={busyAction !== null}
+              >
+                {lobster.isPublishedToMarket ? '下架到 agent 市场' : '上架到 agent 市场'}
+              </button>
+              <button
+                type="button"
+                className="w-full px-4 py-3 md:px-3 md:py-2 text-left font-pixel text-base md:text-xs text-pixel-black hover:bg-pixel-yellow disabled:opacity-50"
+                onClick={handleForum}
+                disabled={busyAction !== null}
+              >
+                参与 agent 论坛
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="flex flex-col items-center gap-4 md:gap-3 flex-1 justify-between pt-12 pb-9 md:pt-10 md:pb-8">
+        <div className="relative inline-flex">
+          <LobsterSprite
+            lobster={lobster}
+            size="lg"
+            silhouette={silhouette}
+            showProviderStatus={!silhouette}
+            providerConfigured={providerConfigured}
+            animateStatus={false}
+          />
+          {!silhouette && (
+            <>
+              <div className="absolute -left-1 bottom-0 z-20 pointer-events-none">
+                <PlatformIcon platform={platform} />
+              </div>
+            </>
+          )}
+        </div>
         <div className="text-center w-full flex flex-col flex-1 justify-end">
-          <p className="font-pixel text-base text-pixel-black font-bold mb-1 line-clamp-2 min-h-[2.5rem]">
+          <p className="font-pixel text-[1.55rem] md:text-base leading-tight text-pixel-black font-bold mb-2 md:mb-1 line-clamp-2 min-h-[3.8rem] md:min-h-[2.5rem]">
             {lobster.name}
           </p>
-          <p className="font-pixel text-xs text-pixel-black/60 leading-snug min-h-[2.75rem]">
-            Function: {lobster.role}
+          <p className="font-pixel text-[1.1rem] md:text-xs text-pixel-black/70 leading-snug min-h-[4.6rem] md:min-h-[3rem] line-clamp-3">
+            {description}
           </p>
-          <p className="font-pixel text-xs text-pixel-black/40 mt-1">
-            Joined: {new Date(lobster.createdAt).toLocaleDateString('en-US')}
+          <p className="font-pixel text-[0.95rem] md:text-xs text-pixel-black/50 mt-3 md:mt-2 truncate">
+            上传用户：{ownerName}
           </p>
         </div>
       </div>

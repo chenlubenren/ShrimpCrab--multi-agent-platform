@@ -11,6 +11,7 @@ import { PixelButton } from '@/components/ui/PixelButton';
 import { PixelInput } from '@/components/ui/PixelInput';
 import { LobsterSprite } from '@/components/lobster/LobsterSprite';
 import { BackButton } from '@/components/ui/BackButton';
+import { hasConfiguredProvider } from '@/lib/agentProvider';
 
 const CONNECTED_LOBSTER_ID = 'lobster-001';
 
@@ -67,16 +68,6 @@ export default function LobsterChatPage() {
     }));
   };
 
-  const getMockResponse = (userMessage: string) => {
-    const responses = [
-      `OK, let me analyze: ${userMessage}`,
-      'Interesting question! Let me think...',
-      `Based on my understanding, ${userMessage}, let me organize the ideas.`,
-      `Got it! About "${userMessage.slice(0, 10)}..." I'll give you some suggestions.`,
-    ];
-    return responses[Math.floor(Math.random() * responses.length)];
-  };
-
   const appendAssistantMessage = (content: string) => {
     setMessages((prev) => [...prev, { role: 'lobster', content }]);
     addConversation(lobsterId, { role: 'lobster', content });
@@ -93,10 +84,10 @@ export default function LobsterChatPage() {
     setIsTyping(true);
 
     if (!isGatewayEnabled) {
-      setTimeout(() => {
-        appendAssistantMessage(getMockResponse(userMessage));
-        setIsTyping(false);
-      }, 1200);
+      appendAssistantMessage(
+        'This agent is not connected to a live runtime yet. Use a configured OpenClaw gateway agent or complete this agent setup before chatting.'
+      );
+      setIsTyping(false);
       return;
     }
 
@@ -147,6 +138,9 @@ export default function LobsterChatPage() {
     );
   }
 
+  const providerConfigured = hasConfiguredProvider(lobster);
+  const providerStatusLabel = providerConfigured ? '已配置供应商' : '未配置供应商';
+
   return (
     <div className="max-w-4xl mx-auto">
       <motion.div
@@ -156,7 +150,15 @@ export default function LobsterChatPage() {
       >
         <BackButton href="/" />
         <div className="flex items-center gap-3 flex-1">
-          <LobsterSprite lobster={lobster} size="md" />
+          <div className="relative shrink-0" title={providerStatusLabel}>
+            <LobsterSprite
+              lobster={lobster}
+              size="md"
+              showProviderStatus
+              providerConfigured={providerConfigured}
+              animateStatus={false}
+            />
+          </div>
           <div>
             <h1 className="font-pixel text-2xl text-pixel-black">{lobster.name}</h1>
             <p className="font-pixel text-sm text-pixel-black/60">{lobster.role}</p>

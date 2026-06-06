@@ -29,7 +29,7 @@ const DETECTION_RULES: DetectionRule[] = [
   },
   {
     type: 'codex',
-    pathPatterns: [/^\.codex\//i, /(^|\/)codex\.toml$/i, /(^|\/)AGENTS\.md$/i],
+    pathPatterns: [/^\.codex\//i, /(^|\/)codex\.toml$/i],
     weight: 3,
   },
   {
@@ -58,8 +58,50 @@ export function normalizeAgentType(value?: string | null): AgentPlatformType {
   return 'unknown';
 }
 
+function normalizePath(p: string): string {
+  return p.replace(/\\/g, '/').replace(/^\/+/, '');
+}
+
+function stripCommonRootPrefix(paths: string[]): string[] {
+  if (paths.length === 0) return paths;
+
+  const parts = paths.map((p) => normalizePath(p).split('/'));
+  const root = parts[0][0];
+  if (parts.every((seg) => seg.length > 1 && seg[0] === root)) {
+    return paths.map((p) => {
+      const normalized = normalizePath(p);
+      const slashIndex = normalized.indexOf('/');
+      return slashIndex >= 0 ? normalized.slice(slashIndex + 1) : normalized;
+    });
+  }
+
+  return paths.map(normalizePath);
+}
+
+function hasPathSegment(paths: string[], segment: string): boolean {
+  const needle = segment.toLowerCase();
+  return paths.some((p) =>
+    normalizePath(p)
+      .split('/')
+      .some((part) => part.toLowerCase() === needle)
+  );
+}
+
+function detectForcedAgentTypeFromPaths(filePaths: string[]): AgentPlatformType {
+  const normalized = filePaths.map(normalizePath);
+  const stripped = stripCommonRootPrefix(normalized);
+  const paths = Array.from(new Set([...normalized, ...stripped]));
+
+  const hasClaude = hasPathSegment(paths, '.claude');
+  const hasCodex = hasPathSegment(paths, '.codex');
+
+  if (hasClaude && !hasCodex) return 'claude-code';
+  if (hasCodex && !hasClaude) return 'codex';
+  return 'unknown';
+}
+
 export function detectAgentTypeFromPaths(filePaths: string[]): AgentPlatformType {
-  const paths = filePaths.map((p) => p.replace(/\\/g, '/').replace(/^\/+/, ''));
+  const paths = stripCommonRootPrefix(filePaths.map(normalizePath));
 
   const scores: Partial<Record<AgentPlatformType, number>> = {};
   for (const rule of DETECTION_RULES) {
@@ -90,6 +132,9 @@ export function resolveAgentType(
 ): AgentPlatformType {
   const fromUser = normalizeAgentType(userSelected);
   if (fromUser !== 'unknown') return fromUser;
+
+  const forcedFromPath = detectForcedAgentTypeFromPaths(filePaths);
+  if (forcedFromPath !== 'unknown') return forcedFromPath;
 
   const fromManifest = normalizeAgentType(manifestType);
   if (fromManifest !== 'unknown') return fromManifest;

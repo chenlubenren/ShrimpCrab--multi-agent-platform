@@ -28,9 +28,13 @@ echo "  npm: $(npm --version)"
 echo "[2/4] Navigating to project..."
 cd /mnt/j/Desktop/code练习/cursor_project/openclaw_company_source_code/backend
 
-# 3. Install dependencies
-echo "[3/4] Installing npm dependencies..."
+# 3. Install dependencies and Pi Agent
+echo "[3/4] Installing npm dependencies and Pi Agent..."
 npm install
+if ! command -v pi &> /dev/null; then
+    npm install -g @earendil-works/pi-coding-agent
+fi
+echo "  Pi Agent: $(pi --version 2>/dev/null || echo 'not available')"
 
 # 4. Create workspace directory
 echo "[4/4] Creating workspace directory..."
