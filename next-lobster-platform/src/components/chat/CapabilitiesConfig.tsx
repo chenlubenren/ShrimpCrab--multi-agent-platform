@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
 import { PixelButton } from '@/components/ui/PixelButton';
 import { PixelInput } from '@/components/ui/PixelInput';
+import { API_BASE } from '@/lib/runtime';
 
 interface Skill {
   id: string;
@@ -26,8 +27,6 @@ interface CapabilitiesConfigProps {
   agent: Agent;
   token: string;
 }
-
-const API_BASE = 'http://localhost:3002';
 
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;

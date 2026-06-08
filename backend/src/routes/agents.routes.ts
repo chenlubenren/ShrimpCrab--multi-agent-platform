@@ -68,6 +68,15 @@ const TEA_PARTY_ROUND_DELAY_MS = [500, 1400] as const;
 const TEA_PARTY_BETWEEN_SPEAKER_DELAY_MS = [120, 450] as const;
 const TEA_PARTY_STOP_PATTERN = /停止这个话题|停止话题|暂停这个话题|结束这个话题|先停一下|stop this topic|stop topic/i;
 const TEA_PARTY_WHITEBOARD_COLUMNS = ['ideas', 'questions', 'actions', 'risks'] as const;
+function getPublicBackendUrl(req: Request): string {
+  const configuredUrl = process.env.PUBLIC_BACKEND_URL?.trim().replace(/\/+$/, '');
+  if (configuredUrl) return configuredUrl;
+
+  const forwardedProto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim();
+  const protocol = forwardedProto || req.protocol;
+  const host = req.get('host');
+  return host ? `${protocol}://${host}` : '';
+}
 const TEA_PARTY_BOARD_WIDTH = 1800;
 const TEA_PARTY_NOTE_WIDTH = 220;
 const TEA_PARTY_NOTE_HEIGHT = 148;
@@ -1800,7 +1809,7 @@ router.post('/:id/chat-assets', chatImageUpload.single('image'), async (req: Aut
         mimeType: file.mimetype,
         size: file.size,
         relativePath: `.chat-assets/${finalFilename}`.replace(/\\/g, '/'),
-        previewUrl: `http://localhost:3002/api/agents/${id}/chat-assets/${encodeURIComponent(finalFilename)}`,
+        previewUrl: `${getPublicBackendUrl(req)}/api/agents/${id}/chat-assets/${encodeURIComponent(finalFilename)}`,
       },
     });
   } catch (error) {

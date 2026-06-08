@@ -1,6 +1,5 @@
 import { Lobster, Architecture, Message, Conversation, WorkflowDsl, WorkflowExecution, SessionMessage, WhiteboardNote, Project, ProjectInput, ProjectFileContent, ProjectFileTree, RuntimeHealth } from '@/types';
-
-const API_BASE = 'http://localhost:3002';
+import { API_BASE } from '@/lib/runtime';
 
 export type FeishuIntegrationScope = 'agent' | 'team';
 

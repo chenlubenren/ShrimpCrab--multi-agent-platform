@@ -12,6 +12,7 @@ services:
       - NODE_ENV=production
       - JWT_SECRET=${JWT_SECRET:-your-secret-change-me}
       - CORS_ORIGIN=${CORS_ORIGIN:-http://localhost:3000}
+      - PUBLIC_BACKEND_URL=${PUBLIC_BACKEND_URL:-http://localhost:3002}
       - WORKSPACE_ROOT=/app/data/workspaces
     volumes:
       # Persist workspaces data

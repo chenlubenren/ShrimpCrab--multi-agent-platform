@@ -19,8 +19,10 @@ output/
 .DS_Store
 *.pem
 .env
+.env.*
 .env*.local
 !.env.example
+!.env.*.example
 
 # Backend runtime data
 backend/data/

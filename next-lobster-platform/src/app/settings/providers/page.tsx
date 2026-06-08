@@ -6,6 +6,7 @@ import { BackButton } from '@/components/ui/BackButton';
 import { PixelButton } from '@/components/ui/PixelButton';
 import { useAuthStore } from '@/store/useAuthStore';
 import { fetchRuntimeHealth } from '@/lib/api';
+import { API_BASE } from '@/lib/runtime';
 import type { RuntimeHealth } from '@/types';
 import {
   PROVIDER_TYPES,
@@ -18,8 +19,6 @@ import {
   type ProviderPreset,
   type ProviderType,
 } from '@/lib/providerPresets';
-
-const API_BASE = 'http://localhost:3002';
 
 interface Provider {
   id: string;

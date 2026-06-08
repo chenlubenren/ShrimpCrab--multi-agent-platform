@@ -17,8 +17,9 @@ import {
   type AgentPlatformType,
   type DetectionResult,
 } from '@/lib/agentTypeDetect';
+import { API_BASE } from '@/lib/runtime';
 
-const BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3002';
+const BASE_URL = API_BASE;
 
 type FileUploadMode = 'folder' | 'zip';
 type UploadMode = FileUploadMode | 'coze';

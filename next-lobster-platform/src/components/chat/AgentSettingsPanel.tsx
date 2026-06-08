@@ -5,6 +5,7 @@ import { motion } from 'framer-motion';
 import { PixelButton } from '@/components/ui/PixelButton';
 import { FeishuIntegrationCard } from '@/components/integration/FeishuIntegrationCard';
 import { getModelDisplayName, normalizeProviderModels } from '@/lib/providerPresets';
+import { API_BASE } from '@/lib/runtime';
 
 interface Provider {
   id: string;
@@ -35,8 +36,6 @@ interface AgentSettingsPanelProps {
   onClose: () => void;
   onAgentUpdate?: (updatedAgent: Agent) => void;
 }
-
-const API_BASE = 'http://localhost:3002';
 
 const PLATFORM_TO_PROVIDER_TYPE: Record<string, string> = {
   'claude-code': 'claude',

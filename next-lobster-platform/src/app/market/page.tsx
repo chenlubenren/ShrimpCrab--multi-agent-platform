@@ -5,8 +5,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { useSearchParams } from 'next/navigation';
 import { BackButton } from '@/components/ui/BackButton';
 import { useAuthStore } from '@/store/useAuthStore';
-
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3002';
+import { API_BASE } from '@/lib/runtime';
 
 type MarketTabKey = 'market' | 'social';
 

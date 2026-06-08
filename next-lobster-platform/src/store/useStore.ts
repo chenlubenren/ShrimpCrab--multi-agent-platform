@@ -15,6 +15,7 @@ import {
   WhiteboardNote,
 } from '@/types';
 import * as api from '@/lib/api';
+import { API_BASE } from '@/lib/runtime';
 import { useAuthStore } from './useAuthStore';
 
 interface LobsterStore {
@@ -460,7 +461,7 @@ export const useStore = create<LobsterStore>()(
 
   deleteAgentAPI: async (id) => {
     const token = useAuthStore.getState().token;
-    await fetch(`http://localhost:3002/api/agents/${id}`, {
+    await fetch(`${API_BASE}/api/agents/${id}`, {
       method: 'DELETE',
       headers: {
         Authorization: `Bearer ${token}`,

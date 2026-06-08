@@ -14,6 +14,7 @@ import { CapabilitiesConfig } from '@/components/chat/CapabilitiesConfig';
 import { TokenUsageDisplay } from '@/components/chat/TokenUsageDisplay';
 import { MessageRenderer } from '@/components/chat/MessageRenderer';
 import { getModelDisplayName, normalizeProviderModels } from '@/lib/providerPresets';
+import { API_BASE } from '@/lib/runtime';
 
 interface Agent {
   id: string;
@@ -90,8 +91,6 @@ interface UploadedChatAsset {
 }
 
 type TabType = 'chat' | 'monitor' | 'capabilities';
-
-const API_BASE = 'http://localhost:3002';
 
 function MessageActionButton({
   title,

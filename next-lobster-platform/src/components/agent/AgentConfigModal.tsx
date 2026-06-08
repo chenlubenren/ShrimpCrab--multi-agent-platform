@@ -7,6 +7,7 @@ import { PixelButton } from '@/components/ui/PixelButton';
 import { FeishuIntegrationCard } from '@/components/integration/FeishuIntegrationCard';
 import { useAuthStore } from '@/store/useAuthStore';
 import { Lobster } from '@/types';
+import { API_BASE } from '@/lib/runtime';
 
 interface AgentConfigModalProps {
   agent: Lobster;
@@ -34,8 +35,6 @@ interface AgentUserConfig {
   temperature?: number;
   maxTokens?: number;
 }
-
-const API_BASE = 'http://localhost:3002';
 
 const PLATFORMS = [
   { value: 'openclaw', label: 'OpenClaw' },

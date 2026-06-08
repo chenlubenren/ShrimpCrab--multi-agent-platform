@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { wsUrl } from '@/lib/runtime';
 
 export interface AgentChatMessage {
   id: string;
@@ -48,8 +49,6 @@ interface UseAgentChatReturn {
   hydrateMessages: (messages: AgentChatMessage[]) => void;
 }
 
-const WS_BASE = 'ws://localhost:3003';
-
 export function useAgentChat({
   agentId,
   token,
@@ -93,8 +92,7 @@ export function useAgentChat({
     if (conversationId) {
       params.set('conversationId', conversationId);
     }
-    const wsUrl = `${WS_BASE}?${params.toString()}`;
-    const ws = new WebSocket(wsUrl);
+    const ws = new WebSocket(wsUrl(params));
 
     ws.onopen = () => {
       console.log('WebSocket connected');

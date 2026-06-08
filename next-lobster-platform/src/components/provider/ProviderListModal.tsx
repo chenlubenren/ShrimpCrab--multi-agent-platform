@@ -15,8 +15,7 @@ import {
   type ProviderPreset,
   type ProviderType,
 } from '@/lib/providerPresets';
-
-const API_BASE = 'http://localhost:3002';
+import { API_BASE } from '@/lib/runtime';
 
 interface Provider {
   id: string;

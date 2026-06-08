@@ -1,6 +1,7 @@
 import { AuthResponse, LoginDto, RegisterDto, User } from '@/types';
+import { API_BASE } from '@/lib/runtime';
 
-const BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3002';
+const BASE_URL = API_BASE;
 
 function getToken(): string | null {
   if (typeof window === 'undefined') return null;
