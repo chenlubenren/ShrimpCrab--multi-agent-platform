@@ -43,7 +43,7 @@ function NetworkGraph() {
   }, [nodes]);
 
   return (
-    <div className="absolute inset-0 overflow-hidden">
+    <div className="pointer-events-none absolute inset-0 overflow-hidden">
       {/* Dense grid pattern */}
       <div
         className="absolute inset-0 opacity-[0.03]"
@@ -224,7 +224,7 @@ export function PixelHero({ onEnter }: PixelHeroProps) {
 
   return (
     <motion.div
-      className="fixed inset-0 z-50 bg-pixel-white flex flex-col items-center justify-center overflow-hidden"
+      className="pointer-events-none fixed inset-0 z-50 bg-pixel-white flex flex-col items-center justify-center overflow-hidden"
       initial={{ opacity: 1 }}
       exit={{ opacity: 0 }}
       transition={{ duration: 0.4 }}
@@ -309,7 +309,7 @@ export function PixelHero({ onEnter }: PixelHeroProps) {
         {showButton && (
           <motion.button
             onClick={onEnter}
-            className="mt-5 px-5 py-2.5 bg-pixel-blue border-4 border-pixel-black font-pixel text-base text-pixel-white hover:bg-pixel-yellow hover:text-pixel-black transition-all duration-150"
+            className="pointer-events-auto mt-5 px-5 py-2.5 bg-pixel-blue border-4 border-pixel-black font-pixel text-base text-pixel-white hover:bg-pixel-yellow hover:text-pixel-black transition-all duration-150"
             style={{ boxShadow: '4px 4px 0px rgba(16,16,16,0.12)' }}
             initial={{ opacity: 0, scale: 0.8 }}
             animate={{ opacity: 1, scale: 1 }}
