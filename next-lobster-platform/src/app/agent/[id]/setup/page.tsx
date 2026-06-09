@@ -496,7 +496,7 @@ function AgentSetupPageInner() {
               <p className="mt-2 font-pixel text-xs text-pixel-black/50">
                 {canEditProfile
                   ? '这段介绍会显示在 Agent 卡片和后续详情里。'
-                  : '从市场下载的他人 Agent 不能修改名称和介绍。'}
+                  : '从市场召唤的他人 Agent 不能修改名称和介绍。'}
               </p>
             </div>
 

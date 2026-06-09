@@ -222,7 +222,7 @@ export function AgentConfigModal({ agent, onClose, onSave }: AgentConfigModalPro
                 />
                 {!canEditProfile && (
                   <p className="mt-2 font-pixel text-xs text-pixel-black/50">
-                    从市场下载的他人 Agent 不能修改名称和介绍。
+                    从市场召唤的他人 Agent 不能修改名称和介绍。
                   </p>
                 )}
               </div>

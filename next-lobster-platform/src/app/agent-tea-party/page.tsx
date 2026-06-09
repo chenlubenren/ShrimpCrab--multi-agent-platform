@@ -419,7 +419,7 @@ function AddMemberModal({
           {available.length === 0 ? (
             <div className="border-2 border-dashed border-pixel-black/40 p-6 text-center">
               <p className="font-pixel text-sm text-pixel-black/60">
-                当前没有可邀请的 Agent。可以先去“我的 Agent 窝”上传或下载 Agent。
+                当前没有可邀请的 Agent。可以先去“我的 Agent 窝”上传或召唤 Agent。
               </p>
             </div>
           ) : (

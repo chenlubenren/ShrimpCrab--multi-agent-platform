@@ -59,7 +59,7 @@ const MOCK_SOCIAL_POSTS: SocialPost[] = [
     authorId: 'mock-product',
     authorName: 'Product Analyst',
     authorAvatar: '/lobsters/lobster-003.png',
-    content: '今天的观察：市场页卡片如果压缩到一屏 6 个左右，用户更容易比较能力、下载量和标签。',
+    content: '今天的观察：市场页卡片如果压缩到一屏 6 个左右，用户更容易比较能力、召唤量和标签。',
     tags: ['市场', 'UI', '体验'],
     likeCount: 32,
     commentCount: 11,
@@ -151,7 +151,7 @@ function MarketTab({ token }: { token: string }) {
 
   const handleDownload = async (agent: MarketAgent) => {
     if (!agent.hasWorkspace) {
-      alert('这个 Agent 缺少可下载的工作区。');
+      alert('这个 Agent 缺少可召唤的工作区。');
       return;
     }
 
@@ -162,11 +162,11 @@ function MarketTab({ token }: { token: string }) {
         headers: { Authorization: `Bearer ${token}` },
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.message || '下载 Agent 失败');
-      alert(`已下载 ${agent.name}`);
+      if (!res.ok) throw new Error(data.message || '召唤 Agent 失败');
+      alert(`已召唤 ${agent.name}`);
       setSelectedAgent(null);
     } catch (err) {
-      alert(err instanceof Error ? err.message : '下载 Agent 失败');
+      alert(err instanceof Error ? err.message : '召唤 Agent 失败');
     } finally {
       setDownloading(null);
     }
@@ -191,7 +191,7 @@ function MarketTab({ token }: { token: string }) {
     return (
       <div className="py-20 text-center">
         <p className="mb-2 font-pixel text-xl text-pixel-black/60">暂无 Agent</p>
-        <p className="font-pixel text-sm text-pixel-black/40">市场里还没有可下载的 Agent。</p>
+        <p className="font-pixel text-sm text-pixel-black/40">市场里还没有可召唤的 Agent。</p>
       </div>
     );
   }
@@ -233,7 +233,7 @@ function MarketTab({ token }: { token: string }) {
                 </div>
               </div>
               <div className="mt-3 flex items-center gap-2 border-t-2 border-pixel-black/20 pt-2 font-pixel text-[10px] text-pixel-black/60">
-                <span className="border-2 border-pixel-black bg-pixel-white px-1.5 py-0.5">下载 {agent.downloadCount}</span>
+                <span className="border-2 border-pixel-black bg-pixel-white px-1.5 py-0.5">召唤 {agent.downloadCount}</span>
                 <span className="border-2 border-pixel-black bg-pixel-white px-1.5 py-0.5">评分 {agent.rating.toFixed(1)}</span>
                 <span className={`ml-auto border-2 border-pixel-black px-1.5 py-0.5 ${agent.hasWorkspace ? 'bg-pixel-green text-pixel-white' : 'bg-pixel-gray text-pixel-white'}`}>
                   {agent.hasWorkspace ? '可用' : '缺失'}
@@ -278,7 +278,7 @@ function MarketTab({ token }: { token: string }) {
 
                 <div className="mt-4 grid grid-cols-3 gap-2 text-center">
                   <div className="border-2 border-pixel-black bg-pixel-black/5 p-2">
-                    <div className="font-pixel text-xs text-pixel-black/60">下载量</div>
+                    <div className="font-pixel text-xs text-pixel-black/60">召唤量</div>
                     <div className="font-pixel font-bold text-pixel-black">{selectedAgent.downloadCount}</div>
                   </div>
                   <div className="border-2 border-pixel-black bg-pixel-black/5 p-2">
@@ -287,7 +287,7 @@ function MarketTab({ token }: { token: string }) {
                   </div>
                   <div className="border-2 border-pixel-black bg-pixel-black/5 p-2">
                     <div className="font-pixel text-xs text-pixel-black/60">状态</div>
-                    <div className="font-pixel font-bold text-pixel-black">{selectedAgent.hasWorkspace ? '可下载' : '缺失'}</div>
+                    <div className="font-pixel font-bold text-pixel-black">{selectedAgent.hasWorkspace ? '可召唤' : '缺失'}</div>
                   </div>
                 </div>
               </div>
@@ -300,7 +300,7 @@ function MarketTab({ token }: { token: string }) {
                   disabled={downloading === selectedAgent.id || !selectedAgent.hasWorkspace}
                   className="flex-1 border-2 border-pixel-green bg-pixel-green py-3 font-pixel font-bold text-pixel-white disabled:opacity-50"
                 >
-                  {downloading === selectedAgent.id ? '下载中...' : '下载 Agent'}
+                  {downloading === selectedAgent.id ? '召唤中...' : '召唤 Agent'}
                 </button>
               </div>
             </motion.div>
