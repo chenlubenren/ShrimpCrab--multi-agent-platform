@@ -13,6 +13,7 @@ import { useAuthStore } from '@/store/useAuthStore';
 import { Lobster, Project, Session, SessionMessage } from '@/types';
 import { hasConfiguredProvider } from '@/lib/agentProvider';
 import { useOpenClawDesktopBridge } from '@/lib/desktop';
+import { useDesktopDisplayMode } from '@/lib/desktopDisplayMode';
 import { adoptOfficialLobster } from '@/lib/api';
 import { useRouter, useSearchParams } from 'next/navigation';
 
@@ -329,12 +330,16 @@ function OfficialAdoptPrompt({
   isLoggedIn,
   promptKey,
   legacyPromptKey,
+  agentCount,
+  agentDataReady,
   userName,
   onOfficialAdopted,
 }: {
   isLoggedIn: boolean;
   promptKey: string | null;
   legacyPromptKey?: string | null;
+  agentCount: number;
+  agentDataReady: boolean;
   userName?: string;
   onOfficialAdopted: () => Promise<void>;
 }) {
@@ -350,19 +355,25 @@ function OfficialAdoptPrompt({
   }, [defaultOfficialName]);
 
   useEffect(() => {
-    if (!isLoggedIn || !promptKey) {
+    if (!isLoggedIn || !promptKey || !agentDataReady || agentCount > 0) {
       setShowOfficialAdoptPrompt(false);
       return;
     }
 
-    if (window.localStorage.getItem(promptKey)) return;
+    const hasSeenPrompt = [promptKey, legacyPromptKey]
+      .filter(Boolean)
+      .some((key) => window.localStorage.getItem(key as string));
+    if (hasSeenPrompt) {
+      setShowOfficialAdoptPrompt(false);
+      return;
+    }
 
     const timer = window.setTimeout(() => {
       setShowOfficialAdoptPrompt(true);
     }, 120);
 
     return () => window.clearTimeout(timer);
-  }, [isLoggedIn, legacyPromptKey, promptKey]);
+  }, [agentCount, agentDataReady, isLoggedIn, legacyPromptKey, promptKey]);
 
   const markOfficialPromptSeen = () => {
     for (const key of [promptKey, legacyPromptKey].filter(Boolean) as string[]) {
@@ -691,6 +702,399 @@ function ProjectCard({ project, index }: { project: Project; index: number }) {
   );
 }
 
+type DesktopActionTone = 'green' | 'blue' | 'yellow' | 'red' | 'gray';
+type DesktopActionIcon = 'adopt' | 'upload' | 'market' | 'den' | 'team' | 'teams' | 'projects' | 'tea' | 'home' | 'settings';
+
+interface TraditionalDesktopHomeProps {
+  lobsters: Lobster[];
+  projects: Project[];
+  sessions: Session[];
+  sessionMessages: SessionMessage[];
+  teamCount: number;
+  isLoggedIn: boolean;
+  isLocalMode: boolean;
+  hasSeenHero: boolean;
+  deleteAgentAPI: (id: string) => Promise<void> | void;
+  onConfigAgent: (agent: Lobster) => void;
+  onChanged: () => Promise<void> | void;
+}
+
+interface DesktopActionItem {
+  href: string;
+  title: string;
+  description: string;
+  eyebrow: string;
+  tone: DesktopActionTone;
+  icon: DesktopActionIcon;
+}
+
+const toneStyles: Record<DesktopActionTone, { bg: string; border: string; text: string }> = {
+  green: { bg: 'bg-pixel-green', border: 'border-t-pixel-green', text: 'text-pixel-green' },
+  blue: { bg: 'bg-pixel-blue', border: 'border-t-pixel-blue', text: 'text-pixel-blue' },
+  yellow: { bg: 'bg-pixel-yellow', border: 'border-t-pixel-yellow', text: 'text-pixel-yellow' },
+  red: { bg: 'bg-pixel-red', border: 'border-t-pixel-red', text: 'text-pixel-red' },
+  gray: { bg: 'bg-pixel-gray', border: 'border-t-pixel-gray', text: 'text-pixel-gray' },
+};
+
+function DesktopGlyph({ icon, className = 'h-7 w-7' }: { icon: DesktopActionIcon; className?: string }) {
+  if (icon === 'adopt') {
+    return (
+      <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
+        <path fill="currentColor" d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2Zm-1 5h2v6h-2Zm0 8h2v2h-2Z" />
+      </svg>
+    );
+  }
+  if (icon === 'upload') {
+    return (
+      <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
+        <path fill="currentColor" d="M6 2h9l5 5v15H6V2Zm8 1v5h5M12 11v6M9 14l3-3 3 3" />
+      </svg>
+    );
+  }
+  if (icon === 'market') {
+    return (
+      <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
+        <path fill="currentColor" d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2Zm3.5 14.5-7 2 2-7 7-2-2 7Z" />
+      </svg>
+    );
+  }
+  if (icon === 'den' || icon === 'home') {
+    return (
+      <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
+        <path fill="currentColor" d="M12 3 3 9v12h7v-6h4v6h7V9Zm0 2.5L18 10v9h-2v-6H8v6H6v-9Z" />
+      </svg>
+    );
+  }
+  if (icon === 'team') {
+    return (
+      <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
+        <path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2Z" />
+      </svg>
+    );
+  }
+  if (icon === 'teams') {
+    return (
+      <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
+        <path fill="currentColor" d="M12 2 2 7l10 5 10-5-10-5ZM2 17l10 5 10-5M2 12l10 5 10-5" />
+      </svg>
+    );
+  }
+  if (icon === 'projects') {
+    return <FolderSilhouetteIcon className={className} />;
+  }
+  if (icon === 'settings') {
+    return (
+      <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
+        <path fill="currentColor" d="M19.4 13.5a7.8 7.8 0 0 0 0-3l2-1.5-2-3.4-2.4 1a8.7 8.7 0 0 0-2.6-1.5L14 2.5h-4l-.4 2.6A8.7 8.7 0 0 0 7 6.6l-2.4-1-2 3.4 2 1.5a7.8 7.8 0 0 0 0 3l-2 1.5 2 3.4 2.4-1a8.7 8.7 0 0 0 2.6 1.5l.4 2.6h4l.4-2.6a8.7 8.7 0 0 0 2.6-1.5l2.4 1 2-3.4-2-1.5ZM12 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7Z" />
+      </svg>
+    );
+  }
+  return (
+    <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
+      <path fill="currentColor" d="M20 2H4a2 2 0 0 0-2 2v18l4-4h14a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2Zm0 14H6l-2 2V4h16Z" />
+      <path fill="currentColor" d="M7 9h10v2H7Zm0-3h10v2H7Z" />
+    </svg>
+  );
+}
+
+function getDesktopActions({
+  isLocalMode,
+  isLoggedIn,
+  lobsterCount,
+  projectCount,
+  teamCount,
+}: {
+  isLocalMode: boolean;
+  isLoggedIn: boolean;
+  lobsterCount: number;
+  projectCount: number;
+  teamCount: number;
+}): DesktopActionItem[] {
+  return [
+    {
+      href: '/adopt',
+      title: '快速领养',
+      description: '立即获得新伙伴，一键部署到你的工作空间。',
+      eyebrow: 'QUICK ADOPT',
+      tone: 'green',
+      icon: 'adopt',
+    },
+    {
+      href: '/upload',
+      title: isLocalMode ? '导入 Agent' : '上传 Agent',
+      description: isLocalMode ? '识别本地 Agent 并设置介绍头像。' : '导入训练好的智能体，配置为你的专属 Agent。',
+      eyebrow: isLocalMode ? 'IMPORT' : 'UPLOAD',
+      tone: 'blue',
+      icon: 'upload',
+    },
+    {
+      href: '/market',
+      title: 'Agent 世界',
+      description: '浏览 Agent 市场与论坛，发现社区精选。',
+      eyebrow: 'MARKET',
+      tone: 'yellow',
+      icon: 'market',
+    },
+    {
+      href: '/my-den',
+      title: '我的 Agent 窝',
+      description: isLoggedIn ? `管理你已拥有的 ${lobsterCount} 个 Agent。` : '登录后查看你已拥有的 Agent。',
+      eyebrow: `MY AGENTS · ${isLoggedIn ? lobsterCount : 0}`,
+      tone: 'red',
+      icon: 'den',
+    },
+    {
+      href: '/architectures/create',
+      title: '创建团队',
+      description: '用画布或自然语言设计新的 Agent 协作团队。',
+      eyebrow: 'CREATE TEAM',
+      tone: 'blue',
+      icon: 'team',
+    },
+    {
+      href: '/architectures/mine',
+      title: '我的团队',
+      description: isLoggedIn ? `查看和管理已创建的 ${teamCount} 个团队。` : '登录后查看和管理团队。',
+      eyebrow: `MY TEAMS · ${isLoggedIn ? teamCount : 0}`,
+      tone: 'green',
+      icon: 'teams',
+    },
+    {
+      href: '/projects',
+      title: '我的项目',
+      description: isLoggedIn ? `管理 ${projectCount} 个服务器工作空间。` : '登录后查看项目工作空间。',
+      eyebrow: `PROJECTS · ${isLoggedIn ? projectCount : 0}`,
+      tone: 'yellow',
+      icon: 'projects',
+    },
+    {
+      href: '/agent-tea-party',
+      title: 'Agent 茶话会',
+      description: isLoggedIn ? '进入多 Agent 群聊协作与任务讨论。' : '登录后使用多 Agent 群聊。',
+      eyebrow: 'TEA PARTY',
+      tone: 'red',
+      icon: 'tea',
+    },
+  ];
+}
+
+function TraditionalStatCard({
+  label,
+  value,
+  note,
+  tone,
+}: {
+  label: string;
+  value: number;
+  note: string;
+  tone: DesktopActionTone;
+}) {
+  const styles = toneStyles[tone];
+  return (
+    <motion.div
+      layout
+      className={`border-4 border-t-[6px] border-pixel-black ${styles.border} bg-pixel-white p-4`}
+      style={{ boxShadow: '4px 4px 0px 0px #101010' }}
+    >
+      <p className="font-pixel text-sm uppercase text-pixel-black/55">{label}</p>
+      <p className="mt-1 font-pixel text-4xl font-bold leading-none text-pixel-black">{value}</p>
+      <p className={`mt-3 font-pixel text-xs ${styles.text}`}>{note}</p>
+    </motion.div>
+  );
+}
+
+function TraditionalActionTile({ action, index }: { action: DesktopActionItem; index: number }) {
+  const styles = toneStyles[action.tone];
+  const yellowCard = action.tone === 'yellow';
+  const titleClassName = yellowCard
+    ? 'text-pixel-black group-hover:text-pixel-blue'
+    : 'text-pixel-white group-hover:text-pixel-yellow';
+  const descriptionClassName = yellowCard ? 'text-pixel-black/70' : 'text-pixel-white/80';
+  const eyebrowClassName = yellowCard ? 'text-pixel-black/55' : 'text-pixel-white/65';
+  const arrowClassName = yellowCard ? 'text-pixel-black' : 'text-pixel-white';
+
+  return (
+    <Link href={action.href} className="block h-full no-underline">
+      <motion.div
+        initial={{ opacity: 0, y: 18 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.04 * index }}
+        whileHover={{ y: -4, x: 2 }}
+        whileTap={{ y: 1, scale: 0.99 }}
+        className={`group flex h-full min-h-[188px] flex-col border-4 border-pixel-black ${styles.bg} p-5 2xl:min-h-[202px]`}
+        style={{ boxShadow: '4px 4px 0px 0px #101010' }}
+      >
+        <span className={`mb-4 flex h-12 w-12 items-center justify-center border-2 border-pixel-black bg-pixel-white ${styles.text}`}>
+          <DesktopGlyph icon={action.icon} />
+        </span>
+        <h3 className={`font-pixel text-xl font-bold leading-tight transition-colors ${titleClassName}`}>{action.title}</h3>
+        <p className={`mt-2 flex-1 font-pixel text-sm leading-snug ${descriptionClassName}`}>{action.description}</p>
+        <div className="mt-4 flex items-center justify-between gap-3">
+          <p className={`font-pixel text-xs uppercase tracking-[0.12em] ${eyebrowClassName}`}>{action.eyebrow}</p>
+          <svg viewBox="0 0 24 24" className={`h-6 w-6 opacity-0 transition-opacity group-hover:opacity-100 ${arrowClassName}`} aria-hidden="true">
+            <path fill="currentColor" d="M8.59 16.59 13.17 12 8.59 7.41 10 6l6 6-6 6-1.41-1.41Z" />
+          </svg>
+        </div>
+      </motion.div>
+    </Link>
+  );
+}
+
+function TraditionalPanel({
+  title,
+  actionHref,
+  actionLabel,
+  className = '',
+  children,
+}: {
+  title: string;
+  actionHref: string;
+  actionLabel: string;
+  className?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className={`border-4 border-pixel-black bg-pixel-white p-4 ${className}`} style={{ boxShadow: '4px 4px 0px 0px #101010' }}>
+      <div className="mb-4 flex items-center justify-between gap-3">
+        <h2 className="font-pixel text-xl font-bold text-pixel-black">■ {title}</h2>
+        <Link href={actionHref} className="font-pixel text-sm text-pixel-blue no-underline hover:text-pixel-red">
+          {actionLabel}
+        </Link>
+      </div>
+      {children}
+    </section>
+  );
+}
+
+function TraditionalDesktopHome({
+  lobsters,
+  projects,
+  sessions,
+  sessionMessages,
+  teamCount,
+  isLoggedIn,
+  isLocalMode,
+  hasSeenHero,
+  deleteAgentAPI,
+  onConfigAgent,
+  onChanged,
+}: TraditionalDesktopHomeProps) {
+  const actions = getDesktopActions({
+    isLocalMode,
+    isLoggedIn,
+    lobsterCount: lobsters.length,
+    projectCount: projects.length,
+    teamCount,
+  });
+  const workingAgents = lobsters.filter((lobster) => lobster.status === 'working' || lobster.status === 'busy').length;
+  const todayMessageCount = sessionMessages.filter((message) => {
+    const timestamp = new Date(message.timestamp).getTime();
+    if (Number.isNaN(timestamp)) return false;
+    return Date.now() - timestamp < 24 * 60 * 60 * 1000;
+  }).length;
+  const recentProjects = projects.slice(0, 4);
+
+  return (
+    <motion.div
+      key="traditional"
+      className="hidden md:block"
+      initial={{ opacity: 0, y: 18, scale: 0.985 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      exit={{ opacity: 0, y: -18, scale: 0.985 }}
+      transition={{ duration: 0.28, delay: hasSeenHero ? 0 : 0.25 }}
+    >
+      <div className="relative mx-auto min-h-[820px] w-full max-w-[1840px] overflow-hidden">
+        <div className="space-y-6">
+          <div className="flex items-center justify-between gap-4 border-b-4 border-pixel-black bg-pixel-white pb-4">
+            <div className="flex min-w-0 items-center gap-3">
+              <div className="min-w-0">
+                <p className="font-pixel text-sm text-pixel-black/55">平台 / 首页</p>
+                <p className="truncate font-pixel text-xl font-bold text-pixel-black">传统模式</p>
+              </div>
+            </div>
+            <div className="flex shrink-0 items-center gap-3">
+              <Link
+                href="/architectures/create"
+                className="border-4 border-pixel-black bg-pixel-green px-4 py-2 font-pixel text-base text-pixel-white no-underline transition-colors hover:bg-pixel-blue"
+                style={{ boxShadow: '3px 3px 0px 0px #101010' }}
+              >
+                + 新建团队
+              </Link>
+              <Link
+                href="/adopt"
+                className="border-4 border-pixel-black bg-pixel-white px-4 py-2 font-pixel text-base text-pixel-black no-underline transition-colors hover:bg-pixel-yellow"
+                style={{ boxShadow: '3px 3px 0px 0px #101010' }}
+              >
+                快速领养
+              </Link>
+            </div>
+          </div>
+
+          <section className="border-4 border-pixel-black bg-pixel-white p-6" style={{ boxShadow: '4px 4px 0px 0px #101010' }}>
+            <p className="font-pixel text-xl text-pixel-blue">WELCOME TO AGENT WORLD</p>
+            <h1 className="chinese-large mt-2 text-pixel-black">欢迎来到 Agent 世界</h1>
+            <p className="mt-3 font-pixel text-sm text-pixel-black/60">选择入口开始你的智能体管理与协同工作</p>
+          </section>
+
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+            <TraditionalStatCard label="Agent 总数" value={lobsters.length} note={isLoggedIn ? '已同步到工作台' : '登录后同步'} tone="green" />
+            <TraditionalStatCard label="运行中任务" value={workingAgents} note={workingAgents > 0 ? '正在协作中' : '暂无运行中'} tone="blue" />
+            <TraditionalStatCard label="团队方案" value={teamCount} note="可进入团队管理" tone="yellow" />
+            <TraditionalStatCard label="今日协作" value={todayMessageCount || sessions.length} note={todayMessageCount > 0 ? '24 小时内消息' : '茶话会会话'} tone="red" />
+          </div>
+
+          <section>
+            <h2 className="mb-4 font-pixel text-xl font-bold text-pixel-black">■ 快捷入口</h2>
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-4">
+              {actions.map((action, index) => (
+                <TraditionalActionTile key={action.href} action={action} index={index} />
+              ))}
+            </div>
+          </section>
+
+          <div className="grid gap-6 xl:grid-cols-[minmax(340px,0.75fr)_minmax(0,1.25fr)] 2xl:grid-cols-[minmax(380px,0.7fr)_minmax(0,1.3fr)]">
+            <TraditionalPanel title="最近 Agent" actionHref="/my-den" actionLabel="查看全部 →">
+              {lobsters.length > 0 && isLoggedIn ? (
+                <div className="grid grid-cols-2 gap-3">
+                  {lobsters.slice(0, 2).map((lobster) => (
+                    <LobsterCard
+                      key={lobster.id}
+                      lobster={lobster}
+                      onDelete={deleteAgentAPI}
+                      onConfig={onConfigAgent}
+                      onChanged={onChanged}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <div className="border-4 border-pixel-black bg-pixel-white/50 p-5 text-center">
+                  <p className="font-pixel text-sm text-pixel-black/50">
+                    {isLoggedIn ? '暂无最近 Agent' : '登录后查看最近 Agent'}
+                  </p>
+                </div>
+              )}
+            </TraditionalPanel>
+
+            <TraditionalPanel title="最近项目" actionHref="/projects" actionLabel="管理 →">
+              {recentProjects.length > 0 ? (
+                <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+                  {recentProjects.slice(0, 4).map((project, index) => (
+                    <ProjectCard key={project.id} project={project} index={index} />
+                  ))}
+                </div>
+              ) : (
+                <Link href="/projects" className="block border-4 border-pixel-black bg-pixel-white/50 p-5 text-center no-underline">
+                  <p className="font-pixel text-sm text-pixel-black/50">暂无最近项目，点击创建服务器工作空间</p>
+                </Link>
+              )}
+            </TraditionalPanel>
+          </div>
+        </div>
+      </div>
+    </motion.div>
+  );
+}
+
 export default function HomePage() {
   return (
     <Suspense fallback={<div className="p-8 text-center font-pixel text-pixel-black/50">加载中...</div>}>
@@ -700,7 +1104,7 @@ export default function HomePage() {
 }
 
 function HomePageInner() {
-  const { lobsters, architectures, projects, sessions, sessionMessages, initialize, deleteAgentAPI } = useStore();
+  const { lobsters, architectures, projects, sessions, sessionMessages, isInitialized, isLoading, initialize, deleteAgentAPI } = useStore();
   const { token, user } = useAuthStore();
   const desktopBridge = useOpenClawDesktopBridge();
   const isLocalMode = Boolean(desktopBridge);
@@ -708,6 +1112,7 @@ function HomePageInner() {
   const [showHero, setShowHero] = useState(false);
   const [hasSeenHero, setHasSeenHero] = useState(false);
   const [configAgent, setConfigAgent] = useState<Lobster | null>(null);
+  const [desktopDisplayMode] = useDesktopDisplayMode();
 
   useEffect(() => {
     if (isLoggedIn && (user || isLocalMode)) {
@@ -737,6 +1142,7 @@ function HomePageInner() {
   };
 
   const recentProjects = projects.slice(0, 4);
+  const teamCount = (architectures ?? []).length;
 
   return (
     <>
@@ -749,7 +1155,7 @@ function HomePageInner() {
         projects={projects}
         sessions={sessions}
         sessionMessages={sessionMessages}
-        teamCount={(architectures ?? []).length}
+        teamCount={teamCount}
         isLoggedIn={isLoggedIn}
       />
 
@@ -757,176 +1163,199 @@ function HomePageInner() {
         isLoggedIn={Boolean(token && user)}
         promptKey={token && user ? `openclaw.officialAdoptPrompt.v2.${user.id}` : null}
         legacyPromptKey={token && user ? `openclaw.mobileOfficialAdoptPrompt.${user.id}` : null}
+        agentCount={lobsters.length}
+        agentDataReady={isInitialized && !isLoading}
         userName={user?.username}
         onOfficialAdopted={initialize}
       />
 
-      <motion.div
-        className="hidden space-y-6 md:block"
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        transition={{ duration: 0.5, delay: hasSeenHero ? 0 : 0.3 }}
-      >
-        <motion.div
-          initial={{ opacity: 0, y: -20 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="text-center"
-        >
-          <h1 className="chinese-large mb-2 text-pixel-black">欢迎来到 Agent 世界</h1>
-          <p className="font-pixel text-xl text-pixel-blue">WELCOME TO AGENT WORLD</p>
-          <p className="mt-2 font-pixel text-sm text-pixel-black/60">选择入口开始你的智能体管理与协同工作</p>
-        </motion.div>
+      <AnimatePresence mode="wait" initial={false}>
+        {desktopDisplayMode === 'traditional' ? (
+          <TraditionalDesktopHome
+            key="traditional"
+            lobsters={lobsters}
+            projects={projects}
+            sessions={sessions}
+            sessionMessages={sessionMessages}
+            teamCount={teamCount}
+            isLoggedIn={isLoggedIn}
+            isLocalMode={isLocalMode}
+            hasSeenHero={hasSeenHero}
+            deleteAgentAPI={deleteAgentAPI}
+            onConfigAgent={setConfigAgent}
+            onChanged={initialize}
+          />
+        ) : (
+          <motion.div
+            key="professional"
+            className="hidden space-y-6 md:block"
+            initial={{ opacity: 0, y: 18, scale: 0.985 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -18, scale: 0.985 }}
+            transition={{ duration: 0.28, delay: hasSeenHero ? 0 : 0.3 }}
+          >
+            <motion.div
+              initial={{ opacity: 0, y: -20 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="text-center"
+            >
+              <h1 className="chinese-large mb-2 text-pixel-black">欢迎来到 Agent 世界</h1>
+              <p className="font-pixel text-xl text-pixel-blue">WELCOME TO AGENT WORLD</p>
+              <p className="mt-2 font-pixel text-sm text-pixel-black/60">选择入口开始你的智能体管理与协同工作</p>
+            </motion.div>
 
-        <div className="grid gap-6 md:grid-cols-2">
-          <SectionA>
-            <div className="space-y-4">
-              <MenuCard
-                href="/adopt"
-                title="快速领养"
-                description="Quick Adopt | 立即获得新伙伴"
-                color="bg-pixel-green"
-                delay={0.1}
-                icon={
-                  <svg viewBox="0 0 24 24" className="h-8 w-8 text-pixel-green">
-                    <path fill="currentColor" d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2Zm-1 5h2v6h-2Zm0 8h2v2h-2Z" />
-                  </svg>
-                }
-              />
-              <MenuCard
-                href="/upload"
-                title={isLocalMode ? '导入 Agent' : '上传 Agent'}
-                description={isLocalMode ? 'Import | 识别本地 Agent 并设置介绍头像' : 'Upload | 导入训练好的智能体'}
-                color="bg-pixel-blue"
-                delay={0.2}
-                icon={
-                  <svg viewBox="0 0 24 24" className="h-8 w-8 text-pixel-blue">
-                    <path fill="currentColor" d="M6 2h9l5 5v15H6V2Zm8 1v5h5M12 11v6M9 14l3-3 3 3" />
-                  </svg>
-                }
-              />
-              <MenuCard
-                href="/market"
-                title="Agent 世界"
-                description="Market | Agent 市场与论坛"
-                color="bg-pixel-yellow"
-                delay={0.3}
-                icon={
-                  <svg viewBox="0 0 24 24" className="h-8 w-8 text-pixel-yellow">
-                    <path fill="currentColor" d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2Zm3.5 14.5-7 2 2-7 7-2-2 7Z" />
-                  </svg>
-                }
-              />
-              <MenuCard
-                href="/my-den"
-                title="我的 Agent 窝"
-                description={`My Agents | ${isLoggedIn ? `拥有 ${lobsters.length} 个 Agent` : '登录后查看'}`}
-                color="bg-pixel-red"
-                delay={0.4}
-                icon={
-                  <svg viewBox="0 0 24 24" className="h-8 w-8 text-pixel-red">
-                    <path fill="currentColor" d="M12 3 3 9v12h7v-6h4v6h7V9Zm0 2.5L18 10v9h-2v-6H8v6H6v-9Z" />
-                  </svg>
-                }
-              />
-            </div>
-
-            <div className="mt-6">
-              <h3 className="mb-3 font-pixel text-base text-pixel-black">最近 Agent</h3>
-              {lobsters.length > 0 ? (
-                isLoggedIn ? (
-                  <div className="grid grid-cols-3 gap-2">
-                    {lobsters.slice(0, 3).map((lobster) => (
-                      <LobsterCard
-                        key={lobster.id}
-                        lobster={lobster}
-                        onDelete={deleteAgentAPI}
-                        onConfig={setConfigAgent}
-                        onChanged={initialize}
-                      />
-                    ))}
-                  </div>
-                ) : (
-                  <div className="border-4 border-pixel-black bg-pixel-white/50 p-4 text-center">
-                    <p className="font-pixel text-sm text-pixel-black/50">登录后查看最近 Agent</p>
-                  </div>
-                )
-              ) : (
-                <div className="border-4 border-pixel-black bg-pixel-white/50 p-4 text-center">
-                  <p className="font-pixel text-sm text-pixel-black/50">暂无最近 Agent</p>
+            <div className="grid gap-6 md:grid-cols-2">
+              <SectionA>
+                <div className="space-y-4">
+                  <MenuCard
+                    href="/adopt"
+                    title="快速领养"
+                    description="Quick Adopt | 立即获得新伙伴"
+                    color="bg-pixel-green"
+                    delay={0.1}
+                    icon={
+                      <svg viewBox="0 0 24 24" className="h-8 w-8 text-pixel-green">
+                        <path fill="currentColor" d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2Zm-1 5h2v6h-2Zm0 8h2v2h-2Z" />
+                      </svg>
+                    }
+                  />
+                  <MenuCard
+                    href="/upload"
+                    title={isLocalMode ? '导入 Agent' : '上传 Agent'}
+                    description={isLocalMode ? 'Import | 识别本地 Agent 并设置介绍头像' : 'Upload | 导入训练好的智能体'}
+                    color="bg-pixel-blue"
+                    delay={0.2}
+                    icon={
+                      <svg viewBox="0 0 24 24" className="h-8 w-8 text-pixel-blue">
+                        <path fill="currentColor" d="M6 2h9l5 5v15H6V2Zm8 1v5h5M12 11v6M9 14l3-3 3 3" />
+                      </svg>
+                    }
+                  />
+                  <MenuCard
+                    href="/market"
+                    title="Agent 世界"
+                    description="Market | Agent 市场与论坛"
+                    color="bg-pixel-yellow"
+                    delay={0.3}
+                    icon={
+                      <svg viewBox="0 0 24 24" className="h-8 w-8 text-pixel-yellow">
+                        <path fill="currentColor" d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2Zm3.5 14.5-7 2 2-7 7-2-2 7Z" />
+                      </svg>
+                    }
+                  />
+                  <MenuCard
+                    href="/my-den"
+                    title="我的 Agent 窝"
+                    description={`My Agents | ${isLoggedIn ? `拥有 ${lobsters.length} 个 Agent` : '登录后查看'}`}
+                    color="bg-pixel-red"
+                    delay={0.4}
+                    icon={
+                      <svg viewBox="0 0 24 24" className="h-8 w-8 text-pixel-red">
+                        <path fill="currentColor" d="M12 3 3 9v12h7v-6h4v6h7V9Zm0 2.5L18 10v9h-2v-6H8v6H6v-9Z" />
+                      </svg>
+                    }
+                  />
                 </div>
-              )}
-            </div>
-          </SectionA>
 
-          <SectionB>
-            <div className="space-y-4">
-              <MenuCard
-                href="/architectures/create"
-                title="创建团队"
-                description="Create | 设计新的 Agent 团队"
-                color="bg-pixel-blue"
-                delay={0.1}
-                icon={
-                  <svg viewBox="0 0 24 24" className="h-8 w-8 text-pixel-blue">
-                    <path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2Z" />
-                  </svg>
-                }
-              />
-              <MenuCard
-                href="/architectures/mine"
-                title="我的团队"
-                description={`My Teams | ${isLoggedIn ? `已创建 ${(architectures ?? []).length} 个` : '登录后查看'}`}
-                color="bg-pixel-green"
-                delay={0.2}
-                icon={
-                  <svg viewBox="0 0 24 24" className="h-8 w-8 text-pixel-green">
-                    <path fill="currentColor" d="M12 2 2 7l10 5 10-5-10-5ZM2 17l10 5 10-5M2 12l10 5 10-5" />
-                  </svg>
-                }
-              />
-              <MenuCard
-                href="/projects"
-                title="我的项目"
-                description={`Projects | ${isLoggedIn ? `管理 ${projects.length} 个工作空间` : '登录后查看'}`}
-                color="bg-pixel-yellow"
-                delay={0.3}
-                icon={<FolderSilhouetteIcon className="h-8 w-8 text-pixel-yellow" />}
-              />
-              <MenuCard
-                href="/agent-tea-party"
-                title="Agent 茶话会"
-                description={`Tea Party | ${isLoggedIn ? '多 Agent 群聊协作' : '登录后使用'}`}
-                color="bg-pixel-red"
-                delay={0.4}
-                icon={
-                  <svg viewBox="0 0 24 24" className="h-8 w-8 text-pixel-red">
-                    <path fill="currentColor" d="M20 2H4a2 2 0 0 0-2 2v18l4-4h14a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2Zm0 14H6l-2 2V4h16Z" />
-                    <path fill="currentColor" d="M7 9h10v2H7Zm0-3h10v2H7Z" />
-                  </svg>
-                }
-              />
-            </div>
-
-            <div className="mt-6">
-              <div className="mb-3 flex items-center justify-between gap-3">
-                <h3 className="font-pixel text-base text-pixel-black">最近项目</h3>
-                <Link href="/projects" className="font-pixel text-sm text-pixel-blue">管理项目</Link>
-              </div>
-              {recentProjects.length > 0 ? (
-                <div className="grid grid-cols-2 gap-3">
-                  {recentProjects.map((project, index) => (
-                    <ProjectCard key={project.id} project={project} index={index} />
-                  ))}
+                <div className="mt-6">
+                  <h3 className="mb-3 font-pixel text-base text-pixel-black">最近 Agent</h3>
+                  {lobsters.length > 0 ? (
+                    isLoggedIn ? (
+                      <div className="grid grid-cols-3 gap-2">
+                        {lobsters.slice(0, 3).map((lobster) => (
+                          <LobsterCard
+                            key={lobster.id}
+                            lobster={lobster}
+                            onDelete={deleteAgentAPI}
+                            onConfig={setConfigAgent}
+                            onChanged={initialize}
+                          />
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="border-4 border-pixel-black bg-pixel-white/50 p-4 text-center">
+                        <p className="font-pixel text-sm text-pixel-black/50">登录后查看最近 Agent</p>
+                      </div>
+                    )
+                  ) : (
+                    <div className="border-4 border-pixel-black bg-pixel-white/50 p-4 text-center">
+                      <p className="font-pixel text-sm text-pixel-black/50">暂无最近 Agent</p>
+                    </div>
+                  )}
                 </div>
-              ) : (
-                <Link href="/projects" className="block border-4 border-pixel-black bg-pixel-white/50 p-4 text-center">
-                  <p className="font-pixel text-sm text-pixel-black/50">暂无最近项目，点击创建服务器工作空间</p>
-                </Link>
-              )}
+              </SectionA>
+
+              <SectionB>
+                <div className="space-y-4">
+                  <MenuCard
+                    href="/architectures/create"
+                    title="创建团队"
+                    description="Create | 设计新的 Agent 团队"
+                    color="bg-pixel-blue"
+                    delay={0.1}
+                    icon={
+                      <svg viewBox="0 0 24 24" className="h-8 w-8 text-pixel-blue">
+                        <path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2Z" />
+                      </svg>
+                    }
+                  />
+                  <MenuCard
+                    href="/architectures/mine"
+                    title="我的团队"
+                    description={`My Teams | ${isLoggedIn ? `已创建 ${teamCount} 个` : '登录后查看'}`}
+                    color="bg-pixel-green"
+                    delay={0.2}
+                    icon={
+                      <svg viewBox="0 0 24 24" className="h-8 w-8 text-pixel-green">
+                        <path fill="currentColor" d="M12 2 2 7l10 5 10-5-10-5ZM2 17l10 5 10-5M2 12l10 5 10-5" />
+                      </svg>
+                    }
+                  />
+                  <MenuCard
+                    href="/projects"
+                    title="我的项目"
+                    description={`Projects | ${isLoggedIn ? `管理 ${projects.length} 个工作空间` : '登录后查看'}`}
+                    color="bg-pixel-yellow"
+                    delay={0.3}
+                    icon={<FolderSilhouetteIcon className="h-8 w-8 text-pixel-yellow" />}
+                  />
+                  <MenuCard
+                    href="/agent-tea-party"
+                    title="Agent 茶话会"
+                    description={`Tea Party | ${isLoggedIn ? '多 Agent 群聊协作' : '登录后使用'}`}
+                    color="bg-pixel-red"
+                    delay={0.4}
+                    icon={
+                      <svg viewBox="0 0 24 24" className="h-8 w-8 text-pixel-red">
+                        <path fill="currentColor" d="M20 2H4a2 2 0 0 0-2 2v18l4-4h14a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2Zm0 14H6l-2 2V4h16Z" />
+                        <path fill="currentColor" d="M7 9h10v2H7Zm0-3h10v2H7Z" />
+                      </svg>
+                    }
+                  />
+                </div>
+
+                <div className="mt-6">
+                  <div className="mb-3 flex items-center justify-between gap-3">
+                    <h3 className="font-pixel text-base text-pixel-black">最近项目</h3>
+                    <Link href="/projects" className="font-pixel text-sm text-pixel-blue">管理项目</Link>
+                  </div>
+                  {recentProjects.length > 0 ? (
+                    <div className="grid grid-cols-2 gap-3">
+                      {recentProjects.map((project, index) => (
+                        <ProjectCard key={project.id} project={project} index={index} />
+                      ))}
+                    </div>
+                  ) : (
+                    <Link href="/projects" className="block border-4 border-pixel-black bg-pixel-white/50 p-4 text-center">
+                      <p className="font-pixel text-sm text-pixel-black/50">暂无最近项目，点击创建服务器工作空间</p>
+                    </Link>
+                  )}
+                </div>
+              </SectionB>
             </div>
-          </SectionB>
-        </div>
-      </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {configAgent && (
         <AgentConfigModal

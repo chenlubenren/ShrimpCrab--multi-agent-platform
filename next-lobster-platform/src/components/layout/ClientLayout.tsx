@@ -1,32 +1,296 @@
 'use client';
 
-import { Suspense } from 'react';
+import { Suspense, useEffect, useState } from 'react';
+import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import { motion } from 'framer-motion';
 import { Header } from '@/components/layout/Header';
 import { AuthGuard } from '@/components/auth/AuthGuard';
 import { MobileAppNav } from '@/components/layout/MobileAppNav';
+import { useDesktopDisplayMode } from '@/lib/desktopDisplayMode';
+import { useOpenClawDesktopBridge } from '@/lib/desktop';
+import { useAuthStore } from '@/store/useAuthStore';
 
 interface ClientLayoutProps {
   children: React.ReactNode;
 }
 
+type SidebarIcon = 'home' | 'agents' | 'teams' | 'projects' | 'tea' | 'market' | 'settings';
+
+const SIDEBAR_WIDTH_STORAGE_KEY = 'openclaw.traditionalSidebarWidth';
+const SIDEBAR_DEFAULT_WIDTH = 292;
+const SIDEBAR_MIN_WIDTH = 236;
+const SIDEBAR_MAX_WIDTH = 420;
+
+function clampSidebarWidth(value: number) {
+  return Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, value));
+}
+
+function TraditionalSidebarIcon({ icon, className = 'h-5 w-5' }: { icon: SidebarIcon; className?: string }) {
+  if (icon === 'agents') {
+    return (
+      <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
+        <path fill="currentColor" d="M12 12a4 4 0 1 0-4-4 4 4 0 0 0 4 4Zm-8 9a8 8 0 0 1 16 0H4Z" />
+      </svg>
+    );
+  }
+  if (icon === 'teams') {
+    return (
+      <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
+        <path fill="currentColor" d="M12 2 2 7l10 5 10-5-10-5ZM2 17l10 5 10-5M2 12l10 5 10-5" />
+      </svg>
+    );
+  }
+  if (icon === 'projects') {
+    return (
+      <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
+        <path fill="currentColor" d="M4 5h7l2 3h7v11H4V5Zm2 5v7h12v-7H6Z" />
+      </svg>
+    );
+  }
+  if (icon === 'tea') {
+    return (
+      <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
+        <path fill="currentColor" d="M20 2H4a2 2 0 0 0-2 2v18l4-4h14a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2Zm0 14H6l-2 2V4h16Z" />
+        <path fill="currentColor" d="M7 9h10v2H7Zm0-3h10v2H7Z" />
+      </svg>
+    );
+  }
+  if (icon === 'market') {
+    return (
+      <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
+        <path fill="currentColor" d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2Zm3.5 14.5-7 2 2-7 7-2-2 7Z" />
+      </svg>
+    );
+  }
+  if (icon === 'settings') {
+    return (
+      <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
+        <path fill="currentColor" d="M19.4 13.5a7.8 7.8 0 0 0 0-3l2-1.5-2-3.4-2.4 1a8.7 8.7 0 0 0-2.6-1.5L14 2.5h-4l-.4 2.6A8.7 8.7 0 0 0 7 6.6l-2.4-1-2 3.4 2 1.5a7.8 7.8 0 0 0 0 3l-2 1.5 2 3.4 2.4-1a8.7 8.7 0 0 0 2.6 1.5l.4 2.6h4l.4-2.6a8.7 8.7 0 0 0 2.6-1.5l2.4 1 2-3.4-2-1.5ZM12 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7Z" />
+      </svg>
+    );
+  }
+  return (
+    <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
+      <path fill="currentColor" d="M12 3 3 9v12h7v-6h4v6h7V9Zm0 2.5L18 10v9h-2v-6H8v6H6v-9Z" />
+    </svg>
+  );
+}
+
+function TraditionalDesktopSidebar({
+  open,
+  pathname,
+  width,
+  onWidthChange,
+}: {
+  open: boolean;
+  pathname: string;
+  width: number;
+  onWidthChange: (width: number) => void;
+}) {
+  const navItems: Array<{ href: string; label: string; icon: SidebarIcon; tone: string; exact?: boolean }> = [
+    { href: '/', label: '首页', icon: 'home', tone: 'bg-pixel-green', exact: true },
+    { href: '/my-den', label: '我的 Agent', icon: 'agents', tone: 'bg-pixel-red' },
+    { href: '/architectures/mine', label: '团队管理', icon: 'teams', tone: 'bg-pixel-blue' },
+    { href: '/projects', label: '项目空间', icon: 'projects', tone: 'bg-pixel-yellow' },
+    { href: '/agent-tea-party', label: '茶话会', icon: 'tea', tone: 'bg-pixel-red' },
+    { href: '/market', label: 'Agent 世界', icon: 'market', tone: 'bg-pixel-yellow' },
+    { href: '/settings/providers', label: '设置', icon: 'settings', tone: 'bg-pixel-gray' },
+  ];
+
+  const handleResizePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = width;
+
+    const handlePointerMove = (moveEvent: PointerEvent) => {
+      onWidthChange(clampSidebarWidth(startWidth + moveEvent.clientX - startX));
+    };
+
+    const stopResize = () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', stopResize);
+    };
+
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', stopResize);
+  };
+
+  return (
+    <aside
+      aria-hidden={!open}
+      className="fixed left-0 top-0 z-[55] hidden h-screen flex-col border-r-4 border-pixel-black bg-pixel-black text-pixel-white transition-[transform,opacity] duration-300 ease-out md:flex"
+      data-traditional-sidebar="true"
+      style={{
+        width,
+        boxShadow: '6px 0 0 #101010',
+        opacity: open ? 1 : 0,
+        pointerEvents: open ? 'auto' : 'none',
+        transform: open ? 'translateX(0)' : `translateX(-${width}px)`,
+      }}
+    >
+          <div className="border-b-4 border-pixel-gray/50 px-4 py-4">
+            <div className="flex items-center gap-3">
+              <Link href="/" className="flex min-w-0 flex-1 items-center gap-3 no-underline">
+                <span className="flex h-11 w-11 shrink-0 items-center justify-center border-4 border-pixel-white bg-pixel-red text-pixel-white">
+                  <TraditionalSidebarIcon icon="home" className="h-6 w-6" />
+                </span>
+                <span className="min-w-0">
+                  <span className="chinese-large block truncate text-pixel-white">虾兵蟹将</span>
+                  <span className="block truncate font-pixel text-xs leading-none text-pixel-white/65">AGENT TEAM PLATFORM</span>
+                </span>
+              </Link>
+            </div>
+          </div>
+
+          <nav className="flex-1 space-y-2 overflow-y-auto px-3 py-4">
+            {navItems.map((item, index) => {
+              const active = item.exact ? pathname === item.href : pathname.startsWith(item.href);
+              return (
+                <motion.div
+                  key={item.href}
+                  initial={{ opacity: 0, x: -16 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  transition={{ delay: 0.035 * index }}
+                >
+                  <Link
+                    href={item.href}
+                    className={`flex min-h-[56px] items-center gap-3 border-2 px-3 font-pixel text-base no-underline transition-colors ${
+                      active
+                        ? 'border-pixel-gray bg-pixel-white/10 text-pixel-white'
+                        : 'border-transparent text-pixel-white/72 hover:border-pixel-gray hover:bg-pixel-white/10 hover:text-pixel-white'
+                    }`}
+                  >
+                    <span className={`flex h-8 w-8 shrink-0 items-center justify-center border-2 border-pixel-black ${item.tone} ${item.icon === 'projects' || item.icon === 'market' ? 'text-pixel-black' : 'text-pixel-white'}`}>
+                      <TraditionalSidebarIcon icon={item.icon} />
+                    </span>
+                    <span className="truncate">{item.label}</span>
+                  </Link>
+                </motion.div>
+              );
+            })}
+          </nav>
+
+          <div className="border-t-4 border-pixel-gray/50 p-3">
+            <p className="font-pixel text-xs leading-tight text-pixel-white/45">v0.1.0 · 虾兵蟹将实验室</p>
+          </div>
+
+          <div
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="调整传统模式侧边栏宽度"
+            title="拖拽调整侧边栏宽度"
+            onPointerDown={handleResizePointerDown}
+            className="absolute right-[-8px] top-0 h-full w-4 cursor-col-resize border-x-2 border-pixel-black bg-pixel-yellow/80 opacity-0 transition-opacity hover:opacity-100"
+          />
+    </aside>
+  );
+}
+
 export function ClientLayout({ children }: ClientLayoutProps) {
   const pathname = usePathname();
+  const [desktopDisplayMode] = useDesktopDisplayMode();
+  const { token, hasHydrated } = useAuthStore();
+  const desktopBridge = useOpenClawDesktopBridge();
+  const [isDesktopViewport, setIsDesktopViewport] = useState(false);
+  const [traditionalSidebarOpen, setTraditionalSidebarOpen] = useState(false);
+  const [traditionalSidebarWidth, setTraditionalSidebarWidth] = useState(SIDEBAR_DEFAULT_WIDTH);
+  const isDesktopRuntime = Boolean(desktopBridge);
+  const isPublicPath = pathname === '/' || pathname.startsWith('/auth/');
+  const isRouteGuardBlocking = !isDesktopRuntime && !isPublicPath && (!hasHydrated || !token);
   const isMobileChatRoute = pathname.startsWith('/agent/') || pathname.startsWith('/agent-tea-party');
+  const isTraditionalMode = desktopDisplayMode === 'traditional';
+  const isTraditionalHome = pathname === '/' && isTraditionalMode;
   const mainClassName = isMobileChatRoute
-    ? 'h-[100dvh] min-h-[100dvh] max-w-none overflow-hidden bg-pixel-cream p-0 pb-0 md:mx-auto md:h-auto md:min-h-[calc(100vh-120px)] md:max-w-7xl md:overflow-visible md:bg-pixel-white md:p-4 md:pb-4'
-    : 'max-w-7xl mx-auto p-4 pb-0 md:pb-4 bg-pixel-white min-h-screen md:min-h-[calc(100vh-120px)]';
+    ? isTraditionalMode
+      ? 'h-[100dvh] min-h-[100dvh] max-w-none overflow-hidden bg-pixel-cream p-0 pb-0 md:mx-auto md:h-auto md:min-h-[calc(100vh-120px)] md:w-full md:max-w-none md:overflow-visible md:bg-pixel-white md:p-0'
+      : 'h-[100dvh] min-h-[100dvh] max-w-none overflow-hidden bg-pixel-cream p-0 pb-0 md:mx-auto md:h-auto md:min-h-[calc(100vh-120px)] md:max-w-7xl md:overflow-visible md:bg-pixel-white md:p-4 md:pb-4'
+    : isTraditionalMode
+      ? 'mx-auto min-h-screen bg-pixel-white p-4 pb-0 md:min-h-[calc(100vh-120px)] md:w-full md:max-w-none md:p-0'
+      : 'max-w-7xl mx-auto p-4 pb-0 md:pb-4 bg-pixel-white min-h-screen md:min-h-[calc(100vh-120px)]';
+
+  useEffect(() => {
+    const media = window.matchMedia('(min-width: 768px)');
+    const syncDesktopViewport = () => {
+      setIsDesktopViewport(media.matches);
+      if (isTraditionalMode && media.matches) {
+        document.body.dataset.traditionalDesktopMode = 'true';
+      } else {
+        delete document.body.dataset.traditionalDesktopMode;
+      }
+    };
+
+    syncDesktopViewport();
+    media.addEventListener('change', syncDesktopViewport);
+    return () => {
+      media.removeEventListener('change', syncDesktopViewport);
+      delete document.body.dataset.traditionalDesktopMode;
+    };
+  }, [isTraditionalMode]);
+
+  useEffect(() => {
+    const storedWidth = window.localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY);
+    const parsedWidth = storedWidth ? Number(storedWidth) : NaN;
+    if (Number.isFinite(parsedWidth)) {
+      setTraditionalSidebarWidth(clampSidebarWidth(parsedWidth));
+    }
+  }, []);
+
+  useEffect(() => {
+    window.localStorage.setItem(SIDEBAR_WIDTH_STORAGE_KEY, String(traditionalSidebarWidth));
+  }, [traditionalSidebarWidth]);
+
+  useEffect(() => {
+    setTraditionalSidebarOpen(isTraditionalMode && pathname === '/');
+  }, [isTraditionalMode, pathname]);
+
+  const traditionalShellActive = isTraditionalMode && isDesktopViewport;
+  const traditionalSidebarEnabled = traditionalShellActive && !isRouteGuardBlocking;
+  const traditionalContentStyle = traditionalSidebarEnabled
+    ? { paddingLeft: traditionalSidebarOpen ? traditionalSidebarWidth : 0 }
+    : undefined;
 
   return (
     <>
       <div className="hidden md:block">
-        <Header />
+        <Header
+          traditionalMode={isTraditionalMode}
+          traditionalSidebarOpen={traditionalSidebarOpen}
+          traditionalSidebarWidth={traditionalSidebarWidth}
+          onTraditionalSidebarToggle={() => setTraditionalSidebarOpen((open) => !open)}
+        />
       </div>
-      <main data-app-main="true" className={mainClassName}>
-        <AuthGuard>{children}</AuthGuard>
+      <main data-app-main="true" data-traditional-home={isTraditionalHome ? 'true' : undefined} className={mainClassName}>
+        {traditionalShellActive ? (
+          <div className="hidden md:block">
+            <div className="relative min-h-[calc(100vh-76px)]">
+              {traditionalSidebarEnabled && (
+                <TraditionalDesktopSidebar
+                  open={traditionalSidebarOpen}
+                  pathname={pathname}
+                  width={traditionalSidebarWidth}
+                  onWidthChange={setTraditionalSidebarWidth}
+                />
+              )}
+              <div
+                className="min-h-[calc(100vh-76px)] transition-[padding] duration-300 ease-out"
+                style={traditionalContentStyle}
+              >
+                <div className="px-8 py-6 xl:px-10 2xl:px-12">
+                  <AuthGuard>{children}</AuthGuard>
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <AuthGuard>{children}</AuthGuard>
+        )}
       </main>
-      <footer className="hidden bg-pixel-black border-t-4 border-pixel-red py-4 md:block">
-        <div className="max-w-7xl mx-auto text-center font-pixel text-pixel-white text-xs">
+      <footer
+        className="hidden border-t-4 border-pixel-red bg-pixel-black py-4 transition-[padding] duration-300 ease-out md:block"
+        style={traditionalSidebarEnabled && traditionalSidebarOpen ? { paddingLeft: traditionalSidebarWidth } : undefined}
+      >
+        <div className={`${isTraditionalMode ? 'mx-0 w-full max-w-none px-8 xl:px-10 2xl:px-12' : 'max-w-7xl mx-auto'} text-center font-pixel text-pixel-white text-xs`}>
           <p>虾兵蟹将 - 高效AI团队协作 | Efficient AI Team Collaboration</p>
           <p className="mt-1 text-pixel-red">READY.</p>
         </div>

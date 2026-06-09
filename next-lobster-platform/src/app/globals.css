@@ -64,6 +64,13 @@ body::before {
   z-index: -1;
 }
 
+body[data-traditional-desktop-mode="true"],
+body[data-traditional-desktop-mode="true"]::before,
+body[data-traditional-desktop-mode="true"] main[data-app-main="true"] {
+  background-color: #F8F8F8 !important;
+  background-image: none !important;
+}
+
 body[data-project-workspace-page="true"],
 body[data-project-workspace-page="true"]::before,
 body[data-project-workspace-page="true"] main[data-app-main="true"] {
