@@ -16,6 +16,7 @@ import {
   type AgentPlatformType,
   type DetectionResult,
 } from '@/lib/agentTypeDetect';
+import { pickProfileAvatar } from '@/lib/profileAvatars';
 
 type UploadMode = 'folder' | 'zip';
 type AvatarMode = 'random' | 'pixel';
@@ -61,14 +62,6 @@ interface UploadAgentSetupDialogProps {
 }
 
 const OUTPUT_SIZES = [64, 96, 128, 192];
-const RANDOM_COLORS = [
-  '#E74C3C',
-  '#F1C40F',
-  '#2ECC71',
-  '#3498DB',
-  '#9B59B6',
-  '#111111',
-];
 
 function createEmptyPixels(size: number): string[][] {
   return Array.from({ length: size }, () =>
@@ -100,49 +93,6 @@ function renderPixelAvatar(grid: string[][], gridSize: number, finalSize: number
   }
 
   return canvas.toDataURL('image/png');
-}
-
-function seededRandom(seed: number) {
-  let value = seed % 2147483647;
-  if (value <= 0) value += 2147483646;
-  return () => {
-    value = (value * 16807) % 2147483647;
-    return (value - 1) / 2147483646;
-  };
-}
-
-function hashText(value: string): number {
-  return value.split('').reduce((hash, char) => ((hash << 5) - hash + char.charCodeAt(0)) | 0, 0);
-}
-
-function buildRandomAvatar(seed: number, name: string): string {
-  const rand = seededRandom(Math.abs(seed + hashText(name || 'agent')) || 1);
-  const primary = RANDOM_COLORS[Math.floor(rand() * RANDOM_COLORS.length)];
-  const accent = RANDOM_COLORS[Math.floor(rand() * RANDOM_COLORS.length)];
-  const blocks: string[] = [];
-
-  for (let row = 2; row < 14; row += 1) {
-    for (let col = 2; col < 8; col += 1) {
-      if (rand() > 0.46) {
-        const color = rand() > 0.72 ? accent : primary;
-        blocks.push(`<rect x="${col * 8}" y="${row * 8}" width="8" height="8" fill="${color}"/>`);
-        blocks.push(`<rect x="${(15 - col) * 8}" y="${row * 8}" width="8" height="8" fill="${color}"/>`);
-      }
-    }
-  }
-
-  blocks.push('<rect x="48" y="48" width="8" height="8" fill="#101010"/>');
-  blocks.push('<rect x="72" y="48" width="8" height="8" fill="#101010"/>');
-  blocks.push('<rect x="56" y="88" width="16" height="8" fill="#101010"/>');
-
-  const svg = `
-    <svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" shape-rendering="crispEdges">
-      <rect width="128" height="128" fill="#ffffff"/>
-      <rect x="16" y="16" width="96" height="96" fill="#f8f5e8"/>
-      ${blocks.join('')}
-    </svg>
-  `;
-  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
 }
 
 export function UploadAgentSetupDialog({
@@ -183,7 +133,7 @@ export function UploadAgentSetupDialog({
   const [setupError, setSetupError] = useState('');
 
   const randomAvatarUrl = useMemo(
-    () => buildRandomAvatar(randomSeed, agentName),
+    () => pickProfileAvatar(randomSeed, agentName),
     [agentName, randomSeed]
   );
   const pixelPreviewUrl = useMemo(

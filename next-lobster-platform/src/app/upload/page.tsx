@@ -301,6 +301,7 @@ function DesktopLocalAgentUpload({
   bridge: OpenClawDesktopBridge;
 }) {
   const router = useRouter();
+  const { token } = useAuthStore();
   const didAutoScanRef = useRef(false);
   const [agents, setAgents] = useState<DesktopAgentCandidate[]>([]);
   const [scanSummary, setScanSummary] = useState('准备扫描');
@@ -442,36 +443,60 @@ function DesktopLocalAgentUpload({
       setError('请选择 Agent 平台类型。');
       return;
     }
-    if (!bridge.importLocalAgent) {
-      setError('当前桌面桥暂不支持本地 Agent 导入。');
+    if (!token) {
+      setError('请先登录后再上传 Agent。');
       return;
     }
-
+    if (selectedFolder.files.length === 0) {
+      setError('可上传文件为空，请选择包含 Agent 文件的目录。');
+      return;
+    }
     setIsUploading(true);
     setError('');
     setSuccessMessage('');
     setUploadProgress(15);
 
     try {
-      const result = await bridge.importLocalAgent({
-        rootPath: selectedFolder.rootPath,
-        name: lobsterName.trim(),
-        agentType: effectiveAgentType,
-        description: setup?.description,
-        avatar: setup?.avatar,
+      const response = await fetch(`${BASE_URL}/api/upload`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          uploadType: 'folder',
+          name: lobsterName.trim(),
+          agentType: effectiveAgentType,
+          files: selectedFolder.files,
+          publishToMarket,
+          deferMarketPublish: false,
+          description: setup?.description,
+          avatar: setup?.avatar,
+        }),
       });
 
       setUploadProgress(90);
-      if (!result.success) {
-        throw new Error('本地 Agent 导入失败。');
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data.message || '上传 Agent 失败。');
+      }
+
+      if (bridge.importLocalAgent) {
+        await bridge.importLocalAgent({
+          rootPath: selectedFolder.rootPath,
+          name: lobsterName.trim(),
+          agentType: effectiveAgentType,
+          description: setup?.description,
+          avatar: setup?.avatar,
+        }).catch(() => undefined);
       }
 
       setUploadProgress(100);
-      setSuccessMessage('本地 Agent 已导入。');
+      setSuccessMessage(publishToMarket ? 'Agent 已上传并上架市场。' : 'Agent 已上传。');
       setSetupPanelOpen(false);
-      router.push('/my-den');
+      router.push(typeof data.agentId === 'string' ? `/agent/${data.agentId}` : '/my-den');
     } catch (uploadError) {
-      setError(uploadError instanceof Error ? uploadError.message : '导入失败，请重试。');
+      setError(uploadError instanceof Error ? uploadError.message : '上传失败，请重试。');
     } finally {
       setIsUploading(false);
     }
@@ -491,7 +516,7 @@ function DesktopLocalAgentUpload({
       >
         <div className="mb-6 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <div>
-            <h1 className="font-pixel text-3xl text-pixel-black">导入 Agent</h1>
+            <h1 className="font-pixel text-3xl text-pixel-black">上传 Agent</h1>
             <p className="mt-2 font-pixel text-sm text-pixel-black/60">
               {scanSummary}
             </p>
@@ -559,7 +584,7 @@ function DesktopLocalAgentUpload({
         {!isScanningLocal && agents.length === 0 && (
           <div className="border-4 border-dashed border-pixel-black p-8 text-center">
             <p className="font-pixel text-sm text-pixel-black/60">
-              没有发现可导入的本地 Agent。
+              没有发现可上传的本地 Agent。
             </p>
           </div>
         )}
@@ -617,7 +642,7 @@ function DesktopLocalAgentUpload({
         onForceManualTypeChange={setForceManualType}
         showTypePicker={showTypePicker}
         isDetecting={isReadingFolder}
-        marketPublishEnabled={false}
+        marketPublishEnabled
         publishToMarket={publishToMarket}
         onPublishToMarketChange={handlePublishToggle}
         isScanning={isReadingFolder}
@@ -627,8 +652,8 @@ function DesktopLocalAgentUpload({
         isUploading={isUploading}
         uploadProgress={uploadProgress}
         error={error}
-        submitLabel="完成设置并导入本地 Agent"
-        uploadingLabel="导入中"
+        submitLabel="完成设置并上传 Agent"
+        uploadingLabel="上传中"
         onClose={() => setSetupPanelOpen(false)}
         onSubmit={(payload) => void handleUpload(payload)}
       />
