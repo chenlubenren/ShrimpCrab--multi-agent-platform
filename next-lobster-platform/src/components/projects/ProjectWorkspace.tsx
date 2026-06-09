@@ -27,6 +27,10 @@ const TERMINAL_STATUSES: WorkflowExecutionStatus[] = ['succeeded', 'failed', 'ca
 const FILE_PANEL_DEFAULT_WIDTH = 320;
 const FILE_PANEL_MIN_WIDTH = 220;
 const FILE_PANEL_MAX_WIDTH = 520;
+const WORKFLOW_POLL_INTERVAL_MS = 1500;
+const WORKFLOW_MAX_CONSECUTIVE_POLL_ERRORS = 8;
+const WORKFLOW_MIN_POLL_MS = 5 * 60 * 1000;
+const WORKFLOW_MAX_POLL_MS = 60 * 60 * 1000;
 
 type ChatRole = 'user' | 'assistant' | 'system' | 'error';
 type ProjectMode = 'agent' | 'team';
@@ -275,13 +279,30 @@ export function ProjectWorkspace({
       appendMessage(activeTargetKey, sessionId, makeMessage('system', `已提交给「${activeTeam.name}」，执行编号：${started.id}`));
 
       let current = started;
-      for (let attempt = 0; attempt < 120; attempt += 1) {
+      let consecutivePollErrors = 0;
+      const maxPollAttempts = getWorkflowPollAttemptLimit(activeDsl);
+      for (let attempt = 0; attempt < maxPollAttempts; attempt += 1) {
         if (TERMINAL_STATUSES.includes(current.status)) break;
-        await sleep(1500);
-        current = await fetchWorkflowExecution(started.id);
-        setLatestExecution(current);
+        await sleep(WORKFLOW_POLL_INTERVAL_MS);
+        try {
+          current = await fetchWorkflowExecution(started.id);
+          consecutivePollErrors = 0;
+          setLatestExecution(current);
+        } catch (pollError) {
+          consecutivePollErrors += 1;
+          if (consecutivePollErrors >= WORKFLOW_MAX_CONSECUTIVE_POLL_ERRORS) {
+            const message = pollError instanceof Error ? pollError.message : String(pollError);
+            throw new Error(`团队任务仍在后台运行，但连续多次无法获取进度：${message}`);
+          }
+          await sleep(getWorkflowPollRetryDelay(consecutivePollErrors));
+        }
       }
-      appendMessage(activeTargetKey, sessionId, makeMessage(current.status === 'failed' ? 'error' : 'assistant', buildExecutionReply(current), activeTeam.name));
+      const replyRole: ChatRole = current.status === 'failed'
+        ? 'error'
+        : TERMINAL_STATUSES.includes(current.status)
+          ? 'assistant'
+          : 'system';
+      appendMessage(activeTargetKey, sessionId, makeMessage(replyRole, buildExecutionReply(current), activeTeam.name));
     } catch (error) {
       appendMessage(activeTargetKey, sessionId, makeMessage('error', error instanceof Error ? error.message : '执行任务失败'));
     } finally {
@@ -985,6 +1006,9 @@ function resolveArchitectureDsl(architecture: Architecture): WorkflowDsl | null 
 }
 
 function buildExecutionReply(execution: WorkflowExecution): string {
+  if (execution.status === 'queued' || execution.status === 'running') {
+    return '团队任务仍在执行中。请保持页面打开，或稍后刷新项目查看最新进度。';
+  }
   if (execution.status === 'failed') return execution.error || '执行失败，但服务端没有返回具体错误。';
   if (execution.status === 'cancelled') return '执行已取消。';
   const finalOutput = execution.finalOutput?.trim();
@@ -1055,6 +1079,19 @@ function formatTime(value?: string | null) {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
+}
+
+function getWorkflowPollAttemptLimit(dsl: WorkflowDsl): number {
+  const agentNodeCount = Math.max(1, dsl.nodes.filter((node) => node.type === 'agent').length);
+  const rawTimeoutSec = dsl.execution?.timeoutSec ?? 1800;
+  const timeoutSec = Number.isFinite(rawTimeoutSec) ? rawTimeoutSec : 1800;
+  const timeoutMs = Math.max(1, timeoutSec) * agentNodeCount * 1000;
+  const maxMs = Math.min(WORKFLOW_MAX_POLL_MS, Math.max(WORKFLOW_MIN_POLL_MS, timeoutMs + 60_000));
+  return Math.ceil(maxMs / WORKFLOW_POLL_INTERVAL_MS);
+}
+
+function getWorkflowPollRetryDelay(errorCount: number): number {
+  return WORKFLOW_POLL_INTERVAL_MS + Math.min(errorCount, 6) * 500;
 }
 
 function sleep(ms: number): Promise<void> {

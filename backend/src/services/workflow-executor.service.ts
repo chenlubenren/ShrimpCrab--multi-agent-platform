@@ -179,7 +179,6 @@ interface WorkspaceFileSnapshot {
   absolutePath: string;
   size: number;
   mtimeMs: number;
-  sha256: string;
 }
 
 const TERMINAL_NODE_STATUSES = new Set<WorkflowNodeExecutionStatus>(['succeeded', 'failed', 'skipped']);
@@ -903,7 +902,6 @@ class WorkflowExecutorService extends EventEmitter {
           absolutePath,
           size: stats.size,
           mtimeMs: stats.mtimeMs,
-          sha256: hashFile(absolutePath),
         });
       }
     };
@@ -922,7 +920,7 @@ class WorkflowExecutorService extends EventEmitter {
 
     for (const [relativePath, after] of afterSnapshot.entries()) {
       const before = beforeSnapshot.get(relativePath);
-      if (before && before.size === after.size && before.mtimeMs === after.mtimeMs && before.sha256 === after.sha256) {
+      if (before && before.size === after.size && before.mtimeMs === after.mtimeMs) {
         continue;
       }
       artifacts.push(this.buildArtifact(
@@ -1161,12 +1159,6 @@ function sanitizeFileName(value: string): string {
 
 function normalizeRelativePath(value: string): string {
   return value.replace(/\\/g, '/').replace(/^\/+/, '');
-}
-
-function hashFile(filePath: string): string {
-  const hash = crypto.createHash('sha256');
-  hash.update(fs.readFileSync(filePath));
-  return hash.digest('hex');
 }
 
 function shouldIgnoreWorkflowFile(relativePath: string): boolean {
