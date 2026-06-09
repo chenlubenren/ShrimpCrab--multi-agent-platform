@@ -893,12 +893,12 @@ function TraditionalStatCard({
   return (
     <motion.div
       layout
-      className={`border-4 border-t-[6px] border-pixel-black ${styles.border} bg-pixel-white p-4`}
-      style={{ boxShadow: '4px 4px 0px 0px #101010' }}
+      className={`border-[3px] border-t-[5px] border-pixel-black ${styles.border} bg-pixel-white p-3`}
+      style={{ boxShadow: '3px 3px 0px 0px #101010' }}
     >
-      <p className="font-pixel text-sm uppercase text-pixel-black/55">{label}</p>
-      <p className="mt-1 font-pixel text-4xl font-bold leading-none text-pixel-black">{value}</p>
-      <p className={`mt-3 font-pixel text-xs ${styles.text}`}>{note}</p>
+      <p className="font-pixel text-xs uppercase text-pixel-black/55">{label}</p>
+      <p className="mt-1 font-pixel text-3xl font-bold leading-none text-pixel-black">{value}</p>
+      <p className={`mt-2 font-pixel text-xs ${styles.text}`}>{note}</p>
     </motion.div>
   );
 }
@@ -921,15 +921,15 @@ function TraditionalActionTile({ action, index }: { action: DesktopActionItem; i
         transition={{ delay: 0.04 * index }}
         whileHover={{ y: -4, x: 2 }}
         whileTap={{ y: 1, scale: 0.99 }}
-        className={`group flex h-full min-h-[188px] flex-col border-4 border-pixel-black ${styles.bg} p-5 2xl:min-h-[202px]`}
-        style={{ boxShadow: '4px 4px 0px 0px #101010' }}
+        className={`group flex h-full min-h-[150px] flex-col border-[3px] border-pixel-black ${styles.bg} p-4 2xl:min-h-[162px]`}
+        style={{ boxShadow: '3px 3px 0px 0px #101010' }}
       >
-        <span className={`mb-4 flex h-12 w-12 items-center justify-center border-2 border-pixel-black bg-pixel-white ${styles.text}`}>
-          <DesktopGlyph icon={action.icon} />
+        <span className={`mb-3 flex h-10 w-10 items-center justify-center border-2 border-pixel-black bg-pixel-white ${styles.text}`}>
+          <DesktopGlyph icon={action.icon} className="h-6 w-6" />
         </span>
-        <h3 className={`font-pixel text-xl font-bold leading-tight transition-colors ${titleClassName}`}>{action.title}</h3>
+        <h3 className={`font-pixel text-lg font-bold leading-tight transition-colors ${titleClassName}`}>{action.title}</h3>
         <p className={`mt-2 flex-1 font-pixel text-sm leading-snug ${descriptionClassName}`}>{action.description}</p>
-        <div className="mt-4 flex items-center justify-between gap-3">
+        <div className="mt-3 flex items-center justify-between gap-3">
           <p className={`font-pixel text-xs uppercase tracking-[0.12em] ${eyebrowClassName}`}>{action.eyebrow}</p>
           <svg viewBox="0 0 24 24" className={`h-6 w-6 opacity-0 transition-opacity group-hover:opacity-100 ${arrowClassName}`} aria-hidden="true">
             <path fill="currentColor" d="M8.59 16.59 13.17 12 8.59 7.41 10 6l6 6-6 6-1.41-1.41Z" />
@@ -954,9 +954,9 @@ function TraditionalPanel({
   children: React.ReactNode;
 }) {
   return (
-    <section className={`border-4 border-pixel-black bg-pixel-white p-4 ${className}`} style={{ boxShadow: '4px 4px 0px 0px #101010' }}>
-      <div className="mb-4 flex items-center justify-between gap-3">
-        <h2 className="font-pixel text-xl font-bold text-pixel-black">■ {title}</h2>
+    <section className={`border-[3px] border-pixel-black bg-pixel-white p-3 ${className}`} style={{ boxShadow: '3px 3px 0px 0px #101010' }}>
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <h2 className="font-pixel text-lg font-bold text-pixel-black">■ {title}</h2>
         <Link href={actionHref} className="font-pixel text-sm text-pixel-blue no-underline hover:text-pixel-red">
           {actionLabel}
         </Link>
@@ -1003,37 +1003,12 @@ function TraditionalDesktopHome({
       exit={{ opacity: 0, y: -18, scale: 0.985 }}
       transition={{ duration: 0.28, delay: hasSeenHero ? 0 : 0.25 }}
     >
-      <div className="relative mx-auto min-h-[820px] w-full max-w-[1840px] overflow-hidden">
-        <div className="space-y-6">
-          <div className="flex items-center justify-between gap-4 border-b-4 border-pixel-black bg-pixel-white pb-4">
-            <div className="flex min-w-0 items-center gap-3">
-              <div className="min-w-0">
-                <p className="font-pixel text-sm text-pixel-black/55">平台 / 首页</p>
-                <p className="truncate font-pixel text-xl font-bold text-pixel-black">传统模式</p>
-              </div>
-            </div>
-            <div className="flex shrink-0 items-center gap-3">
-              <Link
-                href="/architectures/create"
-                className="border-4 border-pixel-black bg-pixel-green px-4 py-2 font-pixel text-base text-pixel-white no-underline transition-colors hover:bg-pixel-blue"
-                style={{ boxShadow: '3px 3px 0px 0px #101010' }}
-              >
-                + 新建团队
-              </Link>
-              <Link
-                href="/adopt"
-                className="border-4 border-pixel-black bg-pixel-white px-4 py-2 font-pixel text-base text-pixel-black no-underline transition-colors hover:bg-pixel-yellow"
-                style={{ boxShadow: '3px 3px 0px 0px #101010' }}
-              >
-                快速领养
-              </Link>
-            </div>
-          </div>
-
-          <section className="border-4 border-pixel-black bg-pixel-white p-6" style={{ boxShadow: '4px 4px 0px 0px #101010' }}>
-            <p className="font-pixel text-xl text-pixel-blue">WELCOME TO AGENT WORLD</p>
+      <div className="relative mx-auto min-h-[760px] w-full max-w-[1840px] overflow-visible">
+        <div className="space-y-5">
+          <section className="border-[3px] border-pixel-black bg-pixel-white p-5" style={{ boxShadow: '3px 3px 0px 0px #101010' }}>
+            <p className="font-pixel text-lg text-pixel-blue">WELCOME TO AGENT WORLD</p>
             <h1 className="chinese-large mt-2 text-pixel-black">欢迎来到 Agent 世界</h1>
-            <p className="mt-3 font-pixel text-sm text-pixel-black/60">选择入口开始你的智能体管理与协同工作</p>
+            <p className="mt-2 font-pixel text-sm text-pixel-black/60">选择入口开始你的智能体管理与协同工作</p>
           </section>
 
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
@@ -1044,7 +1019,7 @@ function TraditionalDesktopHome({
           </div>
 
           <section>
-            <h2 className="mb-4 font-pixel text-xl font-bold text-pixel-black">■ 快捷入口</h2>
+            <h2 className="mb-3 font-pixel text-lg font-bold text-pixel-black">■ 快捷入口</h2>
             <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-4">
               {actions.map((action, index) => (
                 <TraditionalActionTile key={action.href} action={action} index={index} />
@@ -1052,10 +1027,10 @@ function TraditionalDesktopHome({
             </div>
           </section>
 
-          <div className="grid gap-6 xl:grid-cols-[minmax(340px,0.75fr)_minmax(0,1.25fr)] 2xl:grid-cols-[minmax(380px,0.7fr)_minmax(0,1.3fr)]">
+          <div className="grid gap-5 xl:grid-cols-[minmax(330px,0.72fr)_minmax(0,1.28fr)] 2xl:grid-cols-[minmax(360px,0.68fr)_minmax(0,1.32fr)]">
             <TraditionalPanel title="最近 Agent" actionHref="/my-den" actionLabel="查看全部 →">
               {lobsters.length > 0 && isLoggedIn ? (
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-2 gap-2">
                   {lobsters.slice(0, 2).map((lobster) => (
                     <LobsterCard
                       key={lobster.id}
@@ -1067,7 +1042,7 @@ function TraditionalDesktopHome({
                   ))}
                 </div>
               ) : (
-                <div className="border-4 border-pixel-black bg-pixel-white/50 p-5 text-center">
+                <div className="border-[3px] border-pixel-black bg-pixel-white/50 p-4 text-center">
                   <p className="font-pixel text-sm text-pixel-black/50">
                     {isLoggedIn ? '暂无最近 Agent' : '登录后查看最近 Agent'}
                   </p>
@@ -1077,13 +1052,13 @@ function TraditionalDesktopHome({
 
             <TraditionalPanel title="最近项目" actionHref="/projects" actionLabel="管理 →">
               {recentProjects.length > 0 ? (
-                <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+                <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
                   {recentProjects.slice(0, 4).map((project, index) => (
                     <ProjectCard key={project.id} project={project} index={index} />
                   ))}
                 </div>
               ) : (
-                <Link href="/projects" className="block border-4 border-pixel-black bg-pixel-white/50 p-5 text-center no-underline">
+                <Link href="/projects" className="block border-[3px] border-pixel-black bg-pixel-white/50 p-4 text-center no-underline">
                   <p className="font-pixel text-sm text-pixel-black/50">暂无最近项目，点击创建服务器工作空间</p>
                 </Link>
               )}
@@ -1137,6 +1112,7 @@ function HomePageInner() {
 
   const handleEnter = () => {
     sessionStorage.setItem('hasSeenHeroAnimation', 'true');
+    window.dispatchEvent(new Event('openclaw:home-intro-complete'));
     setShowHero(false);
     setHasSeenHero(true);
   };

@@ -21,6 +21,8 @@ const SIDEBAR_WIDTH_STORAGE_KEY = 'openclaw.traditionalSidebarWidth';
 const SIDEBAR_DEFAULT_WIDTH = 292;
 const SIDEBAR_MIN_WIDTH = 236;
 const SIDEBAR_MAX_WIDTH = 420;
+const HOME_INTRO_STORAGE_KEY = 'hasSeenHeroAnimation';
+const HOME_INTRO_COMPLETE_EVENT = 'openclaw:home-intro-complete';
 
 function clampSidebarWidth(value: number) {
   return Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, value));
@@ -193,6 +195,7 @@ export function ClientLayout({ children }: ClientLayoutProps) {
   const { token, hasHydrated } = useAuthStore();
   const desktopBridge = useOpenClawDesktopBridge();
   const [isDesktopViewport, setIsDesktopViewport] = useState(false);
+  const [homeIntroActive, setHomeIntroActive] = useState(pathname === '/');
   const [traditionalSidebarOpen, setTraditionalSidebarOpen] = useState(false);
   const [traditionalSidebarWidth, setTraditionalSidebarWidth] = useState(SIDEBAR_DEFAULT_WIDTH);
   const isDesktopRuntime = Boolean(desktopBridge);
@@ -229,6 +232,21 @@ export function ClientLayout({ children }: ClientLayoutProps) {
   }, [isTraditionalMode]);
 
   useEffect(() => {
+    const media = window.matchMedia('(min-width: 768px)');
+    const syncHomeIntroActive = () => {
+      setHomeIntroActive(pathname === '/' && media.matches && !window.sessionStorage.getItem(HOME_INTRO_STORAGE_KEY));
+    };
+
+    syncHomeIntroActive();
+    media.addEventListener('change', syncHomeIntroActive);
+    window.addEventListener(HOME_INTRO_COMPLETE_EVENT, syncHomeIntroActive);
+    return () => {
+      media.removeEventListener('change', syncHomeIntroActive);
+      window.removeEventListener(HOME_INTRO_COMPLETE_EVENT, syncHomeIntroActive);
+    };
+  }, [pathname]);
+
+  useEffect(() => {
     const storedWidth = window.localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY);
     const parsedWidth = storedWidth ? Number(storedWidth) : NaN;
     if (Number.isFinite(parsedWidth)) {
@@ -241,13 +259,14 @@ export function ClientLayout({ children }: ClientLayoutProps) {
   }, [traditionalSidebarWidth]);
 
   useEffect(() => {
-    setTraditionalSidebarOpen(isTraditionalMode && pathname === '/');
-  }, [isTraditionalMode, pathname]);
+    setTraditionalSidebarOpen(isTraditionalMode && pathname === '/' && !homeIntroActive);
+  }, [homeIntroActive, isTraditionalMode, pathname]);
 
   const traditionalShellActive = isTraditionalMode && isDesktopViewport;
-  const traditionalSidebarEnabled = traditionalShellActive && !isRouteGuardBlocking;
+  const traditionalSidebarEnabled = traditionalShellActive && !isRouteGuardBlocking && !homeIntroActive;
+  const effectiveTraditionalSidebarOpen = traditionalSidebarEnabled && traditionalSidebarOpen;
   const traditionalContentStyle = traditionalSidebarEnabled
-    ? { paddingLeft: traditionalSidebarOpen ? traditionalSidebarWidth : 0 }
+    ? { paddingLeft: effectiveTraditionalSidebarOpen ? traditionalSidebarWidth : 0 }
     : undefined;
 
   return (
@@ -255,7 +274,8 @@ export function ClientLayout({ children }: ClientLayoutProps) {
       <div className="hidden md:block">
         <Header
           traditionalMode={isTraditionalMode}
-          traditionalSidebarOpen={traditionalSidebarOpen}
+          traditionalSidebarAvailable={traditionalSidebarEnabled}
+          traditionalSidebarOpen={effectiveTraditionalSidebarOpen}
           traditionalSidebarWidth={traditionalSidebarWidth}
           onTraditionalSidebarToggle={() => setTraditionalSidebarOpen((open) => !open)}
         />
@@ -288,7 +308,7 @@ export function ClientLayout({ children }: ClientLayoutProps) {
       </main>
       <footer
         className="hidden border-t-4 border-pixel-red bg-pixel-black py-4 transition-[padding] duration-300 ease-out md:block"
-        style={traditionalSidebarEnabled && traditionalSidebarOpen ? { paddingLeft: traditionalSidebarWidth } : undefined}
+        style={effectiveTraditionalSidebarOpen ? { paddingLeft: traditionalSidebarWidth } : undefined}
       >
         <div className={`${isTraditionalMode ? 'mx-0 w-full max-w-none px-8 xl:px-10 2xl:px-12' : 'max-w-7xl mx-auto'} text-center font-pixel text-pixel-white text-xs`}>
           <p>虾兵蟹将 - 高效AI团队协作 | Efficient AI Team Collaboration</p>

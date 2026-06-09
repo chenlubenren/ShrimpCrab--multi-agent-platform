@@ -10,6 +10,7 @@ import { useDesktopDisplayMode } from '@/lib/desktopDisplayMode';
 
 interface HeaderProps {
   traditionalMode?: boolean;
+  traditionalSidebarAvailable?: boolean;
   traditionalSidebarOpen?: boolean;
   traditionalSidebarWidth?: number;
   onTraditionalSidebarToggle?: () => void;
@@ -79,6 +80,7 @@ function TraditionalSidebarToggleButton({
 
 export function Header({
   traditionalMode = false,
+  traditionalSidebarAvailable = false,
   traditionalSidebarOpen = false,
   traditionalSidebarWidth = 0,
   onTraditionalSidebarToggle,
@@ -98,7 +100,7 @@ export function Header({
         style={headerContentStyle}
       >
         <div className={`flex min-w-0 items-center gap-4 ${traditionalMode ? 'ml-[3px]' : ''}`}>
-          {traditionalMode && (
+          {traditionalMode && traditionalSidebarAvailable && (
             <TraditionalSidebarToggleButton
               open={traditionalSidebarOpen}
               onToggle={onTraditionalSidebarToggle}

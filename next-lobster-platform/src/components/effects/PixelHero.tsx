@@ -224,7 +224,7 @@ export function PixelHero({ onEnter }: PixelHeroProps) {
 
   return (
     <motion.div
-      className="pointer-events-none fixed inset-0 z-50 bg-pixel-white flex flex-col items-center justify-center overflow-hidden"
+      className="pointer-events-none fixed inset-0 z-[90] bg-pixel-white flex flex-col items-center justify-center overflow-hidden"
       initial={{ opacity: 1 }}
       exit={{ opacity: 0 }}
       transition={{ duration: 0.4 }}
