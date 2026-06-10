@@ -11,6 +11,7 @@ import {
   getMarketAgentPath,
   getAgentWorkspacePath,
   getAgentBaselinePath,
+  ensureAgentRuntimeDirs,
   cloneDirectory,
   generateAgentKey,
   calculateDirChecksum,
@@ -486,6 +487,7 @@ export async function adoptOfficialAgentToUser(
     );
 
     cloneDirectory(workspacePath, baselinePath);
+    const runtimeDirs = ensureAgentRuntimeDirs(workspacePath);
 
     db.prepare(`
       INSERT INTO user_agent_instances (
@@ -504,7 +506,7 @@ export async function adoptOfficialAgentToUser(
       OFFICIAL_AGENT_AVATAR,
       generateAgentKey(),
       workspacePath,
-      path.join(workspacePath, '.openclaw'),
+      runtimeDirs.stateDir,
       baselinePath,
       'idle',
       JSON.stringify(manifest),
@@ -1052,6 +1054,7 @@ export async function downloadMarketAgentToUser(
     }
 
     cloneDirectory(workspacePath, baselinePath);
+    const runtimeDirs = ensureAgentRuntimeDirs(workspacePath);
 
     const manifestPath = path.join(workspacePath, 'agent.manifest.json');
     const manifest = fs.existsSync(manifestPath)
@@ -1077,7 +1080,7 @@ export async function downloadMarketAgentToUser(
       avatar,
       generateAgentKey(),
       workspacePath,
-      path.join(workspacePath, '.openclaw'),
+      runtimeDirs.stateDir,
       baselinePath,
       'idle',
       manifest,

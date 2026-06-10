@@ -6,6 +6,7 @@ import type { UserAgentInstance } from '../db/schema.js';
 import {
   cloneDirectory,
   deleteDirectory,
+  ensureAgentRuntimeDirs,
   generateAgentKey,
   getAgentBaselinePath,
   getAgentWorkspacePath,
@@ -271,6 +272,7 @@ export async function deployCozeAgentToUser(
     );
 
     cloneDirectory(workspacePath, baselinePath);
+    const runtimeDirs = ensureAgentRuntimeDirs(workspacePath);
 
     db.prepare(`
       INSERT INTO user_agent_instances (
@@ -289,7 +291,7 @@ export async function deployCozeAgentToUser(
       '/lobsters/lobster-merchant.png',
       generateAgentKey(),
       workspacePath,
-      path.join(workspacePath, '.openclaw'),
+      runtimeDirs.stateDir,
       baselinePath,
       'idle',
       JSON.stringify(manifest),

@@ -5,6 +5,7 @@ import { getRawDb } from '../db/index.js';
 import {
   getAgentWorkspacePath,
   getAgentBaselinePath,
+  ensureAgentRuntimeDirs,
   generateAgentKey,
   cloneDirectory,
 } from './workspace.service.js';
@@ -192,6 +193,7 @@ function insertAgentRecord(
   const now = Date.now();
   const finalManifest = applyAgentType(manifest, agentType);
   const avatar = normalizeAvatar(metadata?.avatar);
+  const runtimeDirs = ensureAgentRuntimeDirs(workspacePath);
 
   // Use better-sqlite3 native API (db.insert is Drizzle, not better-sqlite3)
   const stmt = db.prepare(`
@@ -213,7 +215,7 @@ function insertAgentRecord(
     avatar,
     agentKey,
     workspacePath,
-    path.join(workspacePath, '.openclaw'),
+    runtimeDirs.stateDir,
     baselinePath,
     'idle',
     JSON.stringify(finalManifest),

@@ -3,6 +3,7 @@ import path from 'path';
 import fs from 'fs';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import * as schema from './schema.js';
+import { ensureAgentRuntimeDirs } from '../services/workspace.service.js';
 
 let db: ReturnType<typeof drizzle> | null = null;
 let sqliteDb: Database.Database | null = null;
@@ -61,6 +62,28 @@ function ensureColumns() {
 
   if (projectCols.length > 0 && !projectCols.includes('agent_ids')) {
     sqliteDb.exec(`ALTER TABLE projects ADD COLUMN agent_ids TEXT NOT NULL DEFAULT '[]'`);
+  }
+}
+
+function ensureAgentRuntimeDirectoryRows() {
+  if (!sqliteDb) return;
+
+  const rows = sqliteDb
+    .prepare(
+      `SELECT id, workspace_path AS workspacePath, state_dir AS stateDir FROM user_agent_instances`
+    )
+    .all() as Array<{ id: string; workspacePath: string; stateDir?: string | null }>;
+  const updateStateDir = sqliteDb.prepare(
+    `UPDATE user_agent_instances SET state_dir = ? WHERE id = ?`
+  );
+
+  for (const row of rows) {
+    if (!row.workspacePath) continue;
+
+    const runtime = ensureAgentRuntimeDirs(row.workspacePath, row.stateDir);
+    if (!row.stateDir || row.stateDir !== runtime.stateDir) {
+      updateStateDir.run(runtime.stateDir, row.id);
+    }
   }
 }
 
@@ -396,6 +419,7 @@ export function getDb() {
 
     // Ensure additive schema migrations for existing DBs
     ensureColumns();
+    ensureAgentRuntimeDirectoryRows();
 
     // Wrap with Drizzle ORM for query builder API
     db = drizzle(sqliteDb, { schema });

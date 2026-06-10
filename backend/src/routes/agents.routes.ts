@@ -928,9 +928,6 @@ async function executeTeaPartyAgentTurn(
       `turn-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`
     );
     fs.mkdirSync(turnStateDir, { recursive: true });
-    if (runnerPlatform !== 'openclaw') {
-      return providerConfig;
-    }
     return {
       apiKey: providerConfig?.apiKey || '',
       baseUrl: providerConfig?.baseUrl,

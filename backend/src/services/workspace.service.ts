@@ -96,6 +96,24 @@ export function getAgentWorkspacePath(userId: string, agentInstanceId: string): 
   return workspaceDir;
 }
 
+export function ensureAgentRuntimeDirs(
+  workspacePath: string,
+  stateDir?: string | null
+): { workspacePath: string; stateDir: string } {
+  const resolvedWorkspacePath = resolveStoredPath(workspacePath);
+  ensureDir(resolvedWorkspacePath);
+
+  const resolvedStateDir = resolveStoredPath(
+    stateDir?.trim() || path.join(resolvedWorkspacePath, '.openclaw')
+  );
+  ensureDir(resolvedStateDir);
+
+  return {
+    workspacePath: resolvedWorkspacePath,
+    stateDir: resolvedStateDir,
+  };
+}
+
 export function getAgentBaselinePath(userId: string, agentInstanceId: string): string {
   const agentRoot = path.join(getUserAgentsRoot(userId), agentInstanceId);
   ensureDir(agentRoot);

@@ -951,7 +951,7 @@ class AgentRunner extends EventEmitter {
     }
 
     if (providerConfig) {
-      if (config.apiKeyEnv) {
+      if (config.apiKeyEnv && providerConfig.apiKey) {
         env[config.apiKeyEnv] = providerConfig.apiKey;
       }
       if (config.baseUrlEnv && providerConfig.baseUrl) {
@@ -960,7 +960,7 @@ class AgentRunner extends EventEmitter {
           : providerConfig.baseUrl;
       }
 
-      if (config.apiKeyEnv === 'ANTHROPIC_API_KEY' && isKimiCodingProvider(providerConfig)) {
+      if (providerConfig.apiKey && config.apiKeyEnv === 'ANTHROPIC_API_KEY' && isKimiCodingProvider(providerConfig)) {
         env.ANTHROPIC_AUTH_TOKEN = providerConfig.apiKey;
       }
     }

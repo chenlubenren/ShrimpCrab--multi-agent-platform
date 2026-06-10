@@ -23,16 +23,13 @@ import {
   getAgentBaselinePath,
   getAgentConversationsPath,
   getUserAgentsRoot,
+  ensureAgentRuntimeDirs,
   resolveStoredPath,
   generateAgentKey,
   cloneDirectory,
   writeFile,
   deleteDirectory,
 } from './workspace.service.js';
-
-function computeDefaultStateDir(workspacePath: string): string {
-  return path.join(workspacePath, '.openclaw');
-}
 
 function generateId(): string {
   const bytes = new Uint8Array(16);
@@ -272,6 +269,8 @@ export async function createAgent(
   // Create baseline snapshot
   cloneDirectory(workspacePath, baselinePath);
 
+  const runtimeDirs = ensureAgentRuntimeDirs(workspacePath);
+
   const newAgent: NewUserAgentInstance = {
     id: agentId,
     userId,
@@ -283,7 +282,7 @@ export async function createAgent(
     agentKey,
     workspacePath,
     baselineSnapshotPath: baselinePath,
-    stateDir: computeDefaultStateDir(workspacePath),
+    stateDir: runtimeDirs.stateDir,
     status: 'idle',
     manifest: dto.manifest ? JSON.stringify(dto.manifest) : '{}',
     tags: JSON.stringify(dto.tags || []),
