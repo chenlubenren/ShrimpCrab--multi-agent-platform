@@ -307,6 +307,12 @@ export function ClientLayout({ children }: ClientLayoutProps) {
     window.localStorage.setItem(SIDEBAR_OPEN_STORAGE_KEY, traditionalSidebarOpen ? 'open' : 'closed');
   }, [traditionalSidebarOpen]);
 
+  useEffect(() => {
+    if (pathname === '/' && isTraditionalMode && isDesktopViewport && !homeIntroActive) {
+      setTraditionalSidebarOpen(true);
+    }
+  }, [homeIntroActive, isDesktopViewport, isTraditionalMode, pathname]);
+
   const traditionalShellActive = isTraditionalMode && isDesktopViewport;
   const traditionalSidebarEnabled = traditionalShellActive && !isRouteGuardBlocking && !homeIntroActive;
   const effectiveTraditionalSidebarOpen = traditionalSidebarEnabled && traditionalSidebarOpen;
