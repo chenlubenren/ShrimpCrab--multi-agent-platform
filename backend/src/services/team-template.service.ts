@@ -33,6 +33,8 @@ export interface TeamTemplateMember {
   skills: string[];
   /** Hex color for visual identity in graph */
   color: string;
+  /** Optional per-agent avatar used when materializing the team. */
+  avatar?: string;
   /** Agent runtime platform; defaults to the team's platform when omitted. */
   platform?: 'openclaw' | 'opencode' | 'hermes' | 'codex' | 'claude-code';
 }
@@ -97,6 +99,7 @@ const AI_MED_RESEARCH_TEAM: TeamTemplate = {
         'auto-review-loop — 自动审查循环',
       ],
       color: '#EF4444',
+      avatar: '/claw_profile/lobster-captain-coral.png',
     },
     {
       roleCode: 'OC-LIT',
@@ -113,6 +116,7 @@ const AI_MED_RESEARCH_TEAM: TeamTemplate = {
         'idea-discovery — 创意发现',
       ],
       color: '#3B82F6',
+      avatar: '/claw_profile/squid-research-silver.png',
     },
     {
       roleCode: 'OC-EXP',
@@ -128,6 +132,7 @@ const AI_MED_RESEARCH_TEAM: TeamTemplate = {
         'experiment-bridge — 实验桥接',
       ],
       color: '#F59E0B',
+      avatar: '/claw_profile/octopus-builder-teal.png',
     },
     {
       roleCode: 'OC-WRT',
@@ -143,6 +148,7 @@ const AI_MED_RESEARCH_TEAM: TeamTemplate = {
         'rebuttal — 审稿回复',
       ],
       color: '#8B5CF6',
+      avatar: '/claw_profile/jellyfish-notes-lilac.png',
     },
   ],
   workflow: {
@@ -189,6 +195,7 @@ const SUPERPOWERS_DEV_TEAM: TeamTemplate = {
       ],
       color: '#EF4444',
       platform: 'openclaw',
+      avatar: '/claw_profile/jellyfish-brainstorm-lime.png',
     },
     {
       roleCode: 'OCODE-DEV',
@@ -205,6 +212,7 @@ const SUPERPOWERS_DEV_TEAM: TeamTemplate = {
       ],
       color: '#3B82F6',
       platform: 'opencode',
+      avatar: '/claw_profile/shrimp-dev.png',
     },
     {
       roleCode: 'HRM-QA',
@@ -217,6 +225,7 @@ const SUPERPOWERS_DEV_TEAM: TeamTemplate = {
       ],
       color: '#10B981',
       platform: 'hermes',
+      avatar: '/claw_profile/crab-qa.png',
     },
   ],
   workflow: {
@@ -273,10 +282,11 @@ export async function adoptTeamTemplate(
 
     for (const member of template.members) {
       const memberPlatform = member.platform ?? template.platform;
+      const memberAvatar = member.avatar ?? template.avatar;
       const agentDto: CreateAgentDto = {
         name: `${member.name}`,
         description: member.description,
-        avatar: template.avatar,
+        avatar: memberAvatar,
         tags: [...template.tags, member.roleCode],
         manifest: {
           templateId: template.id,
@@ -309,6 +319,7 @@ export async function adoptTeamTemplate(
               agentId: agent.id,
               name: agent.name,
               description: member.description,
+              avatar: memberAvatar,
               platform: memberPlatform,
               updatedAt: new Date().toISOString(),
             },

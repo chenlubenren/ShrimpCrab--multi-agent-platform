@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import type {
   Deliverable,
   DeliverableStatus,
+  Lobster,
   WorkflowExecution,
   WorkflowExecutionStatus,
   WorkflowNodeExecutionStatus,
@@ -37,12 +38,14 @@ const DELIVERABLE_STATUS_META: Record<DeliverableStatus, { label: string; classN
 
 export function WorkflowTaskBoard({
   execution,
+  agents = [],
   deliverables = [],
   onOpenFile,
   onReviewDeliverable,
   reviewingDeliverableId,
 }: {
   execution: WorkflowExecution | null;
+  agents?: Lobster[];
   deliverables?: Deliverable[];
   onOpenFile?: (relativePath: string) => void;
   onReviewDeliverable?: (deliverableId: string, status: 'accepted' | 'revision') => void;
@@ -80,6 +83,15 @@ export function WorkflowTaskBoard({
     () => deliverables.filter((item) => item.status !== 'superseded'),
     [deliverables]
   );
+  const agentLookup = useMemo(() => {
+    const byId = new Map<string, Lobster>();
+    const byName = new Map<string, Lobster>();
+    for (const agent of agents) {
+      byId.set(agent.id, agent);
+      byName.set(agent.name, agent);
+    }
+    return { byId, byName };
+  }, [agents]);
   const pendingCount = visibleDeliverables.filter((item) => item.status === 'pending').length;
 
   const executionMeta = execution ? EXECUTION_STATUS_META[execution.status] : null;
@@ -129,11 +141,32 @@ export function WorkflowTaskBoard({
               {agentNodes.map((node) => {
                 const meta = NODE_STATUS_META[node.status];
                 const duration = nodeDuration(node.startedAt, node.completedAt, node.status === 'running' ? nowMs : undefined);
+                const agent = (node.agentInstanceId ? agentLookup.byId.get(node.agentInstanceId) : undefined)
+                  ?? agentLookup.byName.get(node.agentName || '');
+                const agentName = agent?.name || node.agentName || node.label;
+                const agentAvatar = agent?.avatar || '/claw_profile/03.png';
                 return (
                   <div key={node.nodeId} className={`mb-2 border-2 border-pixel-black p-2 ${node.status === 'running' ? 'bg-pixel-yellow/20' : 'bg-pixel-white'}`}>
                     <div className="flex items-center justify-between gap-2">
-                      <span className="min-w-0 flex-1 truncate font-pixel text-xs font-bold text-pixel-black">
-                        {node.agentName || node.label}
+                      <span className="flex min-w-0 flex-1 items-center gap-2">
+                        <span className={`flex h-9 w-9 shrink-0 items-center justify-center border-2 border-pixel-black bg-pixel-white ${node.status === 'running' ? 'animate-online-agent-profile' : ''}`}>
+                          <img
+                            src={agentAvatar}
+                            alt=""
+                            className="h-7 w-7 object-contain"
+                            style={{ imageRendering: 'pixelated' }}
+                          />
+                        </span>
+                        <span className="min-w-0">
+                          <span className="block truncate font-pixel text-xs font-bold text-pixel-black">
+                            {agentName}
+                          </span>
+                          {node.role && (
+                            <span className="block truncate font-pixel text-[10px] text-pixel-black/45">
+                              {node.role}
+                            </span>
+                          )}
+                        </span>
                       </span>
                       <span className={`shrink-0 border-2 border-pixel-black px-1.5 py-0.5 font-pixel text-[10px] ${node.degraded ? 'bg-pixel-red text-pixel-white' : meta.className}`}>
                         {node.degraded ? '降级' : node.status === 'running' ? `${meta.label}…` : meta.label}
@@ -173,6 +206,7 @@ export function WorkflowTaskBoard({
               const meta = DELIVERABLE_STATUS_META[item.status];
               const fileName = item.filePath.split('/').pop() || item.filePath;
               const reviewing = reviewingDeliverableId === item.id;
+              const agent = agentLookup.byName.get(item.agentName || '');
               return (
                 <div key={item.id} className="mb-2 border-2 border-pixel-black bg-pixel-white p-2">
                   <div className="flex items-center justify-between gap-2">
@@ -190,7 +224,17 @@ export function WorkflowTaskBoard({
                   </div>
                   <p className="mt-1 truncate font-pixel text-[10px] text-pixel-black/50" title={item.filePath}>{item.filePath}</p>
                   <div className="mt-1 flex items-center justify-between gap-2">
-                    <span className="font-pixel text-[10px] text-pixel-black/45">{item.agentName || '未知 Agent'}</span>
+                    <span className="flex min-w-0 items-center gap-1.5 font-pixel text-[10px] text-pixel-black/45">
+                      <span className="flex h-6 w-6 shrink-0 items-center justify-center border border-pixel-black bg-pixel-white">
+                        <img
+                          src={agent?.avatar || '/claw_profile/03.png'}
+                          alt=""
+                          className="h-5 w-5 object-contain"
+                          style={{ imageRendering: 'pixelated' }}
+                        />
+                      </span>
+                      <span className="truncate">{item.agentName || '未知 Agent'}</span>
+                    </span>
                     {item.status === 'pending' && onReviewDeliverable && (
                       <div className="flex gap-1">
                         <button

@@ -1,6 +1,6 @@
 'use client';
 
-import { Suspense, useCallback, useEffect, useState } from 'react';
+import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { BackButton } from '@/components/ui/BackButton';
@@ -9,8 +9,11 @@ import { useStore } from '@/store/useStore';
 import { adoptOfficialLobster, fetchTeamTemplates, adoptTeamTemplate } from '@/lib/api';
 import { API_BASE } from '@/lib/runtime';
 
-type MarketTabKey = 'market' | 'social';
+type MarketTabKey = 'market' | 'team' | 'social';
+type MarketDisplayMode = 'grid' | 'category';
 type AdoptPlatform = 'openclaw' | 'hermes' | 'opencode';
+type MarketCategoryKey = AdoptPlatform | 'codex' | 'claude-code';
+type AgentCategoryKey = MarketCategoryKey | 'uncategorized';
 
 interface PlatformHouse {
   id: AdoptPlatform;
@@ -49,6 +52,62 @@ const PLATFORM_HOUSES: PlatformHouse[] = [
     adoptHint: '给你的 OpenCode Agent 起个名字',
     avatar: '/agent-icons/opencode.svg',
     bg: 'bg-amber-600',
+  },
+];
+
+interface MarketCategory {
+  id: MarketCategoryKey;
+  name: string;
+  eyebrow: string;
+  description: string;
+  avatar: string;
+  bg: string;
+  officialHouse?: PlatformHouse;
+}
+
+const MARKET_CATEGORIES: MarketCategory[] = [
+  {
+    id: 'openclaw',
+    name: 'OpenClaw村',
+    eyebrow: 'OPENCLAW',
+    description: 'Workspace、skills、多 Agent 协作型 Agent。',
+    avatar: '/claw_profile/03.png',
+    bg: 'bg-pixel-green',
+    officialHouse: PLATFORM_HOUSES[0],
+  },
+  {
+    id: 'hermes',
+    name: 'Hermes村',
+    eyebrow: 'HERMES',
+    description: '轻量工具调用、定时任务、快速执行型 Agent。',
+    avatar: '/agent-icons/hermes.svg',
+    bg: 'bg-pixel-blue',
+    officialHouse: PLATFORM_HOUSES[1],
+  },
+  {
+    id: 'opencode',
+    name: 'OpenCode村',
+    eyebrow: 'OPENCODE',
+    description: '终端原生、代码执行、工程修复型 Agent。',
+    avatar: '/agent-icons/opencode.svg',
+    bg: 'bg-amber-600',
+    officialHouse: PLATFORM_HOUSES[2],
+  },
+  {
+    id: 'codex',
+    name: 'Codex村',
+    eyebrow: 'CODEX',
+    description: '适合代码理解、修改、评审与自动化协作。',
+    avatar: '/agent-icons/codex.svg',
+    bg: 'bg-pixel-black',
+  },
+  {
+    id: 'claude-code',
+    name: 'Claude村',
+    eyebrow: 'CLAUDE',
+    description: '适合长上下文规划、文档推理与代码协作。',
+    avatar: '/agent-icons/claude-code.svg',
+    bg: 'bg-purple-700',
   },
 ];
 
@@ -147,8 +206,19 @@ function getMarketAvatar(agent: Pick<MarketAgent, 'cachedAvatarUrl' | 'icon'>): 
   return agent.icon || '/lobsters/lobster-004.png';
 }
 
+function getAgentCategory(agent: MarketAgent): AgentCategoryKey {
+  const tags = (agent.tags || []).map((tag) => tag.toLowerCase());
+  const joined = tags.join(' ');
+  if (joined.includes('platform:openclaw') || joined.includes('openclaw')) return 'openclaw';
+  if (joined.includes('platform:hermes') || joined.includes('hermes')) return 'hermes';
+  if (joined.includes('platform:opencode') || joined.includes('opencode')) return 'opencode';
+  if (joined.includes('platform:codex') || joined.includes('codex')) return 'codex';
+  if (joined.includes('platform:claude-code') || joined.includes('claude-code') || joined.includes('claude')) return 'claude-code';
+  return 'uncategorized';
+}
+
 function normalizeTab(value: string | null): MarketTabKey {
-  return value === 'social' || value === 'market' ? value : 'market';
+  return value === 'social' || value === 'team' || value === 'market' ? value : 'market';
 }
 
 function TagList({ tags }: { tags: string[] }) {
@@ -539,85 +609,12 @@ function HouseDetailPage({
 function MarketTab({
   token,
   onEnterHouse,
-  onEnterTeamHouse,
 }: {
   token: string;
   onEnterHouse: (h: PlatformHouse) => void;
-  onEnterTeamHouse: () => void;
 }) {
   return (
-    <>
-      {/* Single-Agent Houses */}
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-        {PLATFORM_HOUSES.map((house, index) => (
-          <motion.button
-            type="button"
-            key={house.id}
-            initial={{ opacity: 0, y: 18 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.04 * index }}
-            whileHover={{ y: -4, x: 2 }}
-            whileTap={{ y: 1, scale: 0.99 }}
-            className={`group flex min-h-[180px] flex-col border-[3px] border-pixel-black ${house.bg} p-4 text-left`}
-            style={{ boxShadow: '3px 3px 0px 0px #101010' }}
-            onClick={() => onEnterHouse(house)}
-          >
-            <span className="mb-3 flex h-10 w-10 items-center justify-center border-2 border-pixel-black bg-pixel-white">
-              <img src={house.avatar} alt="" className="h-7 w-7 object-contain" style={{ imageRendering: 'pixelated' }} />
-            </span>
-            <h3 className="font-pixel text-xl font-bold leading-tight text-pixel-white group-hover:text-pixel-yellow transition-colors">
-              {house.name}
-            </h3>
-            <p className="mt-2 flex-1 font-pixel text-sm leading-snug text-pixel-white/80">
-              {house.description}
-            </p>
-            <div className="mt-3 flex items-center justify-between gap-3">
-              <p className="font-pixel text-xs uppercase tracking-[0.12em] text-pixel-white/65">{house.eyebrow}</p>
-              <svg viewBox="0 0 24 24" className="h-6 w-6 text-pixel-white opacity-0 transition-opacity group-hover:opacity-100" aria-hidden="true">
-                <path fill="currentColor" d="M8.59 16.59 13.17 12 8.59 7.41 10 6l6 6-6 6-1.41-1.41Z" />
-              </svg>
-            </div>
-          </motion.button>
-        ))}
-      </div>
-
-      {/* Multi-Agent House Entry Card */}
-      <motion.button
-        type="button"
-        initial={{ opacity: 0, y: 18 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.15 }}
-        whileHover={{ y: -4, x: 2 }}
-        whileTap={{ y: 1, scale: 0.99 }}
-        className="group mt-4 flex w-full min-h-[120px] flex-col border-[3px] border-pixel-black bg-gradient-to-r from-emerald-500 via-teal-500 to-cyan-500 p-4 text-left"
-        style={{ boxShadow: '3px 3px 0px 0px #101010' }}
-        onClick={onEnterTeamHouse}
-      >
-        <div className="flex items-center gap-4">
-          <span className="flex h-12 w-12 items-center justify-center border-2 border-pixel-black bg-pixel-white">
-            <svg viewBox="0 0 24 24" className="h-8 w-8 text-emerald-600">
-              <path fill="currentColor" d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z" />
-            </svg>
-          </span>
-          <div className="min-w-0 flex-1">
-            <h3 className="font-pixel text-xl font-bold leading-tight text-pixel-white group-hover:text-pixel-yellow transition-colors">
-              多 Agent 家
-            </h3>
-            <p className="mt-1 font-pixel text-sm leading-snug text-pixel-white/80">
-              预配置的多 Agent 协作团队，一键领养即可开始使用。团队内 Agent 分工明确、流水线协作。
-            </p>
-          </div>
-          <div className="flex flex-col items-end gap-1">
-            <p className="font-pixel text-xs uppercase tracking-[0.12em] text-pixel-white/65">MULTI-AGENT</p>
-            <svg viewBox="0 0 24 24" className="h-6 w-6 text-pixel-white opacity-0 transition-opacity group-hover:opacity-100" aria-hidden="true">
-              <path fill="currentColor" d="M8.59 16.59 13.17 12 8.59 7.41 10 6l6 6-6 6-1.41-1.41Z" />
-            </svg>
-          </div>
-        </div>
-      </motion.button>
-
-      <CommunityAgentsSection token={token} />
-    </>
+    <CommunityAgentsSection token={token} onEnterHouse={onEnterHouse} />
   );
 }
 
@@ -629,6 +626,7 @@ interface TeamTemplateMember {
   description: string;
   skills: string[];
   color: string;
+  avatar?: string;
 }
 
 interface TeamTemplateData {
@@ -738,10 +736,14 @@ function TeamAdoptModal({
                   className="border-[2px] border-pixel-black/15 p-2"
                 >
                   <div className="flex items-center gap-2">
-                    <span
-                      className="h-3 w-3 shrink-0 border border-pixel-black/20"
-                      style={{ background: m.color }}
-                    />
+                    <span className="flex h-8 w-8 shrink-0 items-center justify-center border-2 border-pixel-black bg-pixel-white">
+                      <img
+                        src={m.avatar || template.avatar}
+                        alt=""
+                        className="h-6 w-6 object-contain"
+                        style={{ imageRendering: 'pixelated' }}
+                      />
+                    </span>
                     <span className="font-pixel text-xs font-bold text-pixel-black truncate">
                       {m.name}
                     </span>
@@ -829,13 +831,19 @@ function TeamDetailModal({
                   className="border-[2px] border-pixel-black bg-pixel-white p-3"
                   style={{ boxShadow: '2px 2px 0px 0px rgba(16,16,16,0.1)' }}
                 >
-                  <div className="flex items-center gap-2 mb-2">
-                    <span
-                      className="h-4 w-4 border-2 border-pixel-black"
-                      style={{ background: m.color }}
-                    />
-                    <span className="font-pixel text-sm font-bold text-pixel-black">{m.name}</span>
-                    <span className="font-pixel text-[10px] text-pixel-black/40">{m.roleCode}</span>
+                  <div className="mb-2 flex items-center gap-3">
+                    <span className="flex h-11 w-11 shrink-0 items-center justify-center border-2 border-pixel-black bg-pixel-white">
+                      <img
+                        src={m.avatar || template.avatar}
+                        alt=""
+                        className="h-9 w-9 object-contain"
+                        style={{ imageRendering: 'pixelated' }}
+                      />
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate font-pixel text-sm font-bold text-pixel-black">{m.name}</span>
+                      <span className="block font-pixel text-[10px] text-pixel-black/40">{m.roleCode}</span>
+                    </span>
                   </div>
                   <p className="font-pixel text-xs text-pixel-black/60 mb-2">{m.description}</p>
                   <div className="flex flex-wrap gap-1">
@@ -914,11 +922,12 @@ function TeamDetailModal({
   );
 }
 
-function TeamHouseDetailPage({ onBack }: { onBack: () => void }) {
+function TeamHouseDetailPage({ onBack }: { onBack?: () => void }) {
   const [templates, setTemplates] = useState<TeamTemplateData[]>([]);
   const [loading, setLoading] = useState(true);
   const [detailTemplate, setDetailTemplate] = useState<TeamTemplateData | null>(null);
   const [adoptingTemplate, setAdoptingTemplate] = useState<TeamTemplateData | null>(null);
+  const embedded = !onBack;
 
   const loadTemplates = useCallback(async () => {
     try {
@@ -935,16 +944,18 @@ function TeamHouseDetailPage({ onBack }: { onBack: () => void }) {
   }, [loadTemplates]);
 
   return (
-    <div className="min-h-screen bg-pixel-white">
-      <div className="mx-auto max-w-5xl px-4 pb-24">
-        <button
-          type="button"
-          onClick={onBack}
-          className="mt-4 mb-6 flex items-center gap-1.5 border-[3px] border-pixel-black bg-pixel-white px-4 py-2 font-pixel text-sm font-bold text-pixel-black hover:bg-pixel-black/5 transition-colors"
-          style={{ boxShadow: '2px 2px 0px 0px #101010' }}
-        >
-          ← Back
-        </button>
+    <div className={embedded ? '' : 'min-h-screen bg-pixel-white'}>
+      <div className={embedded ? 'pb-10' : 'mx-auto max-w-5xl px-4 pb-24'}>
+        {onBack && (
+          <button
+            type="button"
+            onClick={onBack}
+            className="mt-4 mb-6 flex items-center gap-1.5 border-[3px] border-pixel-black bg-pixel-white px-4 py-2 font-pixel text-sm font-bold text-pixel-black hover:bg-pixel-black/5 transition-colors"
+            style={{ boxShadow: '2px 2px 0px 0px #101010' }}
+          >
+            ← Back
+          </button>
+        )}
 
         {/* Banner */}
         <motion.div
@@ -954,13 +965,13 @@ function TeamHouseDetailPage({ onBack }: { onBack: () => void }) {
           style={{ boxShadow: '3px 3px 0px 0px #101010' }}
         >
           <h1 className="font-pixel text-3xl font-bold text-pixel-white md:text-4xl">
-            欢迎来到多 Agent 家！
+            Agent 团队招募
             <svg viewBox="0 0 24 24" className="ml-2 inline-block h-10 w-10 align-middle text-pixel-white/80">
               <path fill="currentColor" d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z" />
             </svg>
           </h1>
           <p className="mt-2 font-pixel text-sm text-pixel-white/80">
-            预配置的多 Agent 协作团队，一键领养即刻拥有完整团队
+            预配置的多 Agent 协作团队，一键领养即刻拥有完整团队。
           </p>
         </motion.div>
 
@@ -1016,10 +1027,14 @@ function TeamHouseDetailPage({ onBack }: { onBack: () => void }) {
                       key={m.roleCode}
                       className="flex items-center gap-1.5 border-[1.5px] border-pixel-black/10 px-2 py-1.5"
                     >
-                      <span
-                        className="h-2.5 w-2.5 shrink-0 border border-pixel-black/20"
-                        style={{ background: m.color }}
-                      />
+                      <span className="flex h-7 w-7 shrink-0 items-center justify-center border border-pixel-black/20 bg-pixel-white">
+                        <img
+                          src={m.avatar || tpl.avatar}
+                          alt=""
+                          className="h-5 w-5 object-contain"
+                          style={{ imageRendering: 'pixelated' }}
+                        />
+                      </span>
                       <span className="font-pixel text-[10px] text-pixel-black/60 truncate">
                         {m.name}
                       </span>
@@ -1099,10 +1114,69 @@ function TeamHouseDetailPage({ onBack }: { onBack: () => void }) {
   );
 }
 
-function CommunityAgentsSection({ token }: { token: string }) {
+function MarketAgentTile({
+  agent,
+  index,
+  downloading,
+  onDownload,
+}: {
+  agent: MarketAgent;
+  index: number;
+  downloading: boolean;
+  onDownload: (agent: MarketAgent) => void;
+}) {
+  return (
+    <motion.div
+      key={agent.id}
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ delay: 0.04 + index * 0.03 }}
+      whileHover={{ y: -2 }}
+      className="flex min-h-[168px] flex-col border-[3px] border-pixel-black bg-pixel-white p-3"
+      style={{ boxShadow: '3px 3px 0px 0px #101010' }}
+    >
+      <div className="flex gap-3">
+        <div className="flex h-12 w-12 shrink-0 items-center justify-center border-2 border-pixel-black bg-pixel-black/5">
+          <img
+            src={getMarketAvatar(agent)}
+            alt={agent.name}
+            className="h-10 w-10 object-contain"
+            style={{ imageRendering: 'pixelated' }}
+            onError={(e) => { e.currentTarget.src = '/lobsters/lobster-004.png'; }}
+          />
+        </div>
+        <div className="min-w-0 flex-1">
+          <h4 className="truncate font-pixel text-base font-bold text-pixel-black">{agent.name}</h4>
+          <p className="mt-0.5 line-clamp-2 font-pixel text-xs leading-snug text-pixel-black/55">{agent.description}</p>
+        </div>
+      </div>
+      <div className="mt-3 flex flex-wrap gap-1">
+        {(agent.tags || []).slice(0, 4).map((tag) => (
+          <span key={tag} className="border border-pixel-black/20 bg-pixel-black/5 px-1.5 py-0.5 font-pixel text-[10px] text-pixel-black/55">
+            #{tag.replace(/^platform:/, '')}
+          </span>
+        ))}
+      </div>
+      <div className="mt-auto flex items-center justify-between border-t-2 border-pixel-black/10 pt-2">
+        <span className="font-pixel text-[10px] text-pixel-black/45">召唤 {agent.downloadCount}</span>
+        <button
+          type="button"
+          onClick={() => onDownload(agent)}
+          disabled={downloading || !agent.hasWorkspace}
+          className="border-2 border-pixel-black bg-pixel-black px-3 py-1 font-pixel text-[10px] font-bold text-pixel-white disabled:opacity-50 hover:bg-pixel-black/80"
+        >
+          {downloading ? '...' : '召唤'}
+        </button>
+      </div>
+    </motion.div>
+  );
+}
+
+function CommunityAgentsSection({ token, onEnterHouse }: { token: string; onEnterHouse: (h: PlatformHouse) => void }) {
   const [agents, setAgents] = useState<MarketAgent[]>([]);
   const [loading, setLoading] = useState(true);
   const [downloading, setDownloading] = useState<string | null>(null);
+  const [displayMode, setDisplayMode] = useState<MarketDisplayMode>('grid');
 
   const fetchAgents = useCallback(async () => {
     try {
@@ -1123,6 +1197,22 @@ function CommunityAgentsSection({ token }: { token: string }) {
     void fetchAgents();
   }, [fetchAgents]);
 
+  const agentsByCategory = useMemo(() => {
+    const grouped = new Map<MarketCategoryKey, MarketAgent[]>();
+    for (const category of MARKET_CATEGORIES) grouped.set(category.id, []);
+    for (const agent of agents) {
+      const category = getAgentCategory(agent);
+      if (category === 'uncategorized') continue;
+      grouped.set(category, [...(grouped.get(category) || []), agent]);
+    }
+    return grouped;
+  }, [agents]);
+
+  const uncategorizedAgents = useMemo(
+    () => agents.filter((agent) => getAgentCategory(agent) === 'uncategorized'),
+    [agents]
+  );
+
   const handleDownload = async (agent: MarketAgent) => {
     if (!agent.hasWorkspace) return;
     try {
@@ -1141,53 +1231,150 @@ function CommunityAgentsSection({ token }: { token: string }) {
     }
   };
 
-  if (loading || agents.length === 0) return null;
-
   return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.2 }} className="mt-8">
-      <div className="mb-4 flex items-center gap-3">
-        <div className="h-[3px] flex-1 bg-pixel-black/10" />
-        <h3 className="font-pixel text-sm text-pixel-black/50">社区 Agent</h3>
-        <div className="h-[3px] flex-1 bg-pixel-black/10" />
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.08 }} className="space-y-4">
+      <div className="border-[3px] border-pixel-black bg-pixel-white p-3" style={{ boxShadow: '3px 3px 0px 0px #101010' }}>
+        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+          <div>
+            <p className="font-pixel text-xl font-bold text-pixel-black">Agent 市场</p>
+            <p className="font-pixel text-sm leading-snug text-pixel-black/55">
+              默认平铺展示用户上传到市场的所有 Agent，也可以切换为平台分类浏览。
+            </p>
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            <button
+              type="button"
+              aria-label="平铺显示"
+              title="平铺显示"
+              onClick={() => setDisplayMode('grid')}
+              className={`flex h-10 w-10 items-center justify-center border-2 border-pixel-black ${displayMode === 'grid' ? 'bg-pixel-yellow text-pixel-black' : 'bg-pixel-white text-pixel-black hover:bg-pixel-yellow/40'}`}
+            >
+              <svg viewBox="0 0 24 24" className="h-6 w-6" aria-hidden="true">
+                <path fill="currentColor" d="M3 3h8v8H3V3Zm10 0h8v8h-8V3ZM3 13h8v8H3v-8Zm10 0h8v8h-8v-8Z" />
+              </svg>
+            </button>
+            <button
+              type="button"
+              aria-label="分类显示"
+              title="分类显示"
+              onClick={() => setDisplayMode('category')}
+              className={`flex h-10 w-10 items-center justify-center border-2 border-pixel-black ${displayMode === 'category' ? 'bg-pixel-yellow text-pixel-black' : 'bg-pixel-white text-pixel-black hover:bg-pixel-yellow/40'}`}
+            >
+              <svg viewBox="0 0 24 24" className="h-6 w-6" aria-hidden="true">
+                <path fill="currentColor" d="M4 4h7v7H4V4Zm9 0h7v4h-7V4ZM4 13h7v7H4v-7Zm9-3h7v10h-7V10Z" />
+              </svg>
+            </button>
+          </div>
+        </div>
       </div>
-      <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-        {agents.map((agent, i) => (
-          <motion.div
-            key={agent.id}
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.25 + i * 0.03 }}
-            className="border-[3px] border-pixel-black bg-pixel-white p-3"
-            style={{ boxShadow: '3px 3px 0px 0px #101010' }}
-          >
-            <div className="flex gap-3">
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center border-2 border-pixel-black bg-pixel-black/5">
-                <img
-                  src={getMarketAvatar(agent)}
-                  alt={agent.name}
-                  className="h-8 w-8 object-contain"
-                  style={{ imageRendering: 'pixelated' }}
-                  onError={(e) => { e.currentTarget.src = '/lobsters/lobster-004.png'; }}
-                />
-              </div>
-              <div className="min-w-0 flex-1">
-                <h4 className="truncate font-pixel text-sm font-bold text-pixel-black">{agent.name}</h4>
-                <p className="mt-0.5 line-clamp-2 font-pixel text-xs text-pixel-black/55">{agent.description}</p>
-              </div>
-            </div>
-            <div className="mt-2 flex items-center justify-between border-t-2 border-pixel-black/10 pt-2">
-              <span className="font-pixel text-[10px] text-pixel-black/40">召唤 {agent.downloadCount}</span>
-              <button
-                onClick={() => void handleDownload(agent)}
-                disabled={downloading === agent.id || !agent.hasWorkspace}
-                className="border-2 border-pixel-black bg-pixel-black px-3 py-1 font-pixel text-[10px] font-bold text-pixel-white disabled:opacity-50 hover:bg-pixel-black/80"
+
+      {loading && <div className="py-16 text-center font-pixel text-lg text-pixel-black/50">加载 Agent 中...</div>}
+
+      {!loading && agents.length === 0 && displayMode === 'grid' && (
+        <div className="border-[3px] border-dashed border-pixel-black/20 bg-pixel-white p-10 text-center">
+          <p className="font-pixel text-sm text-pixel-black/45">还没有用户上传的市场 Agent。</p>
+        </div>
+      )}
+
+      {!loading && agents.length > 0 && displayMode === 'grid' && (
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+          {agents.map((agent, i) => (
+            <MarketAgentTile
+              key={agent.id}
+              agent={agent}
+              index={i}
+              downloading={downloading === agent.id}
+              onDownload={(item) => void handleDownload(item)}
+            />
+          ))}
+        </div>
+      )}
+
+      {!loading && displayMode === 'category' && (
+        <div className="space-y-4">
+          {MARKET_CATEGORIES.map((category, categoryIndex) => {
+            const categoryAgents = agentsByCategory.get(category.id) || [];
+            return (
+              <motion.section
+                key={category.id}
+                initial={{ opacity: 0, y: 12 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: categoryIndex * 0.04 }}
+                className="border-[3px] border-pixel-black bg-pixel-white"
+                style={{ boxShadow: '3px 3px 0px 0px #101010' }}
               >
-                {downloading === agent.id ? '...' : '召唤'}
-              </button>
-            </div>
-          </motion.div>
-        ))}
-      </div>
+                <div className={`flex flex-col gap-3 border-b-[3px] border-pixel-black p-3 md:flex-row md:items-center md:justify-between ${category.bg} text-pixel-white`}>
+                  <div className="flex min-w-0 items-center gap-3">
+                    <span className="flex h-11 w-11 shrink-0 items-center justify-center border-2 border-pixel-black bg-pixel-white">
+                      <img src={category.avatar} alt="" className="h-8 w-8 object-contain" style={{ imageRendering: 'pixelated' }} />
+                    </span>
+                    <div className="min-w-0">
+                      <h3 className="font-pixel text-xl font-bold leading-tight">{category.name}</h3>
+                      <p className="font-pixel text-xs leading-snug text-pixel-white/75">{category.description}</p>
+                    </div>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-2">
+                    <span className="border-2 border-pixel-white/50 px-2 py-1 font-pixel text-[10px]">{category.eyebrow} · {categoryAgents.length}</span>
+                    {category.officialHouse && (
+                      <button
+                        type="button"
+                        onClick={() => onEnterHouse(category.officialHouse!)}
+                        className="border-2 border-pixel-black bg-pixel-white px-3 py-1.5 font-pixel text-[10px] font-bold text-pixel-black hover:bg-pixel-yellow"
+                      >
+                        官方模板
+                      </button>
+                    )}
+                  </div>
+                </div>
+                <div className="p-3">
+                  {categoryAgents.length > 0 ? (
+                    <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+                      {categoryAgents.map((agent, i) => (
+                        <MarketAgentTile
+                          key={agent.id}
+                          agent={agent}
+                          index={i}
+                          downloading={downloading === agent.id}
+                          onDownload={(item) => void handleDownload(item)}
+                        />
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="border-2 border-dashed border-pixel-black/20 p-4 text-center font-pixel text-xs text-pixel-black/45">
+                      这个村暂时还没有用户上传的 Agent。
+                    </p>
+                  )}
+                </div>
+              </motion.section>
+            );
+          })}
+          {uncategorizedAgents.length > 0 && (
+            <motion.section
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: MARKET_CATEGORIES.length * 0.04 }}
+              className="border-[3px] border-dashed border-pixel-black/35 bg-pixel-white p-3"
+              style={{ boxShadow: '3px 3px 0px 0px #101010' }}
+            >
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <p className="font-pixel text-base font-bold text-pixel-black">未归类 Agent</p>
+                <span className="border-2 border-pixel-black bg-pixel-gray px-2 py-1 font-pixel text-[10px] text-pixel-white">{uncategorizedAgents.length}</span>
+              </div>
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+                {uncategorizedAgents.map((agent, i) => (
+                  <MarketAgentTile
+                    key={agent.id}
+                    agent={agent}
+                    index={i}
+                    downloading={downloading === agent.id}
+                    onDownload={(item) => void handleDownload(item)}
+                  />
+                ))}
+              </div>
+            </motion.section>
+          )}
+        </div>
+      )}
     </motion.div>
   );
 }
@@ -1219,99 +1406,159 @@ function SocialTab({ token, agentId }: { token: string; agentId?: string }) {
     void fetchPosts();
   }, [fetchPosts]);
 
+  const forumStats = [
+    { label: '今日讨论', value: visiblePosts.length + 12 },
+    { label: '活跃 Agent', value: 8 },
+    { label: '协作主题', value: 23 },
+  ];
+  const topicChips = ['项目协作', '工作流', '提示词', '供应商配置', 'Agent 上架', '多 Agent 团队'];
+  const trendItems = [
+    'AI-Med 团队论文流水线',
+    'Codex / Claude 双平台协作',
+    '项目任务板交付物验收',
+    'Agent 市场头像与标签规范',
+  ];
+
   return (
     <div className="space-y-4">
-      <div className="border-4 border-pixel-black bg-pixel-yellow p-3" style={{ boxShadow: '4px 4px 0 #101010' }}>
-        <div className="grid gap-3 md:grid-cols-[1fr_auto] md:items-center">
+      <div className="border-4 border-pixel-black bg-pixel-yellow p-4" style={{ boxShadow: '4px 4px 0 #101010' }}>
+        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
           <div>
-            <p className="font-pixel text-base font-bold text-pixel-black">Agent 论坛示意</p>
-            <p className="mt-1 font-pixel text-xs text-pixel-black/65">展示 Agent 动态、讨论标签和互动数据，后续可接入真实发帖流。</p>
+            <p className="font-pixel text-2xl font-bold leading-none text-pixel-black">Agent 论坛</p>
+            <p className="mt-2 font-pixel text-sm leading-snug text-pixel-black/65">Agent 动态、项目协作和市场反馈集中在这里流动。</p>
           </div>
-          <button type="button" className="border-2 border-pixel-black bg-pixel-blue px-3 py-2 font-pixel text-xs text-pixel-white">
-            发布示意
-          </button>
+          <div className="grid grid-cols-3 gap-2">
+            {forumStats.map((stat) => (
+              <div key={stat.label} className="border-2 border-pixel-black bg-pixel-white px-3 py-2 text-center">
+                <p className="font-pixel text-2xl font-bold leading-none text-pixel-black">{stat.value}</p>
+                <p className="mt-1 font-pixel text-[10px] leading-none text-pixel-black/55">{stat.label}</p>
+              </div>
+            ))}
+          </div>
         </div>
       </div>
 
-      <div className="border-4 border-pixel-black bg-pixel-white p-3">
-        <textarea
-          readOnly
-          value="分享一次项目运行、一个 Agent 技巧，或发起协作讨论..."
-          className="min-h-[76px] w-full resize-none border-2 border-pixel-black bg-pixel-black/5 p-3 font-pixel text-sm text-pixel-black/55"
-        />
-        <div className="mt-2 flex flex-wrap gap-2 font-pixel text-xs text-pixel-black/60">
-          <span className="border-2 border-pixel-black bg-pixel-white px-2 py-1">#项目协作</span>
-          <span className="border-2 border-pixel-black bg-pixel-white px-2 py-1">#工作流</span>
-          <span className="border-2 border-pixel-black bg-pixel-white px-2 py-1">#提示词</span>
-        </div>
-      </div>
-
-      <div className="flex gap-2">
-        {(['latest', 'following', 'trending'] as const).map((type) => (
-          <button
-            key={type}
-            onClick={() => setFeedType(type)}
-            className="px-4 py-2 font-pixel text-sm transition-all"
-            style={{
-              background: feedType === type ? '#10b981' : 'transparent',
-              color: feedType === type ? '#fff' : '#374151',
-              border: `2px solid ${feedType === type ? '#059669' : '#d1d5db'}`,
-              fontWeight: feedType === type ? 'bold' : 'normal',
-            }}
-          >
-            {type === 'latest' ? '最新' : type === 'following' ? '关注' : '热门'}
-          </button>
-        ))}
-        <button onClick={() => void fetchPosts()} className="ml-auto border-2 border-pixel-black bg-pixel-white px-3 py-2 font-pixel text-sm hover:bg-pixel-black/5">
-          刷新
-        </button>
-      </div>
-
-      {loading && <div className="py-20 text-center font-pixel text-lg text-pixel-black/60">加载中...</div>}
-
-      {showingMock && (
-        <div className="border-2 border-pixel-black bg-pixel-black/5 p-3 text-center">
-          <p className="font-pixel text-xs text-pixel-black/55">
-            当前没有真实动态，以下为前端示意内容。
-          </p>
-        </div>
-      )}
-
-      {!loading && visiblePosts.map((post, index) => (
-        <motion.div
-          key={post.id}
-          initial={{ opacity: 0, y: 10 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: index * 0.03 }}
-          className="bg-pixel-white border-2 border-pixel-black"
-        >
-          <div className="p-4">
-            <div className="mb-3 flex items-center gap-3">
-              <div className="flex h-12 w-12 items-center justify-center overflow-hidden bg-pixel-black border-2 border-pixel-black">
-                <img src={post.authorAvatar || '/lobsters/lobster-004.png'} alt={post.authorName} className="h-full w-full object-contain" style={{ imageRendering: 'pixelated' }} />
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_280px]">
+        <div className="space-y-4">
+          <div className="border-4 border-pixel-black bg-pixel-white p-3" style={{ boxShadow: '3px 3px 0 #101010' }}>
+            <div className="flex items-start gap-3">
+              <div className="flex h-12 w-12 shrink-0 items-center justify-center border-2 border-pixel-black bg-pixel-green">
+                <img src="/claw_profile/jellyfish-concierge-sky.png" alt="" className="h-9 w-9 object-contain" style={{ imageRendering: 'pixelated' }} />
               </div>
               <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2">
-                  <span className="font-pixel font-bold text-pixel-black">{post.authorName}</span>
-                  {post.authorType === 'agent' && (
-                    <span className="bg-pixel-green px-1.5 py-0.5 font-pixel text-xs text-pixel-white">Agent</span>
-                  )}
+                <textarea
+                  readOnly
+                  value="分享一次项目运行、一个 Agent 技巧，或发起协作讨论..."
+                  className="min-h-[88px] w-full resize-none border-2 border-pixel-black bg-pixel-black/5 p-3 font-pixel text-sm leading-snug text-pixel-black/55"
+                />
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  {topicChips.slice(0, 3).map((chip) => (
+                    <span key={chip} className="border-2 border-pixel-black bg-pixel-white px-2 py-1 font-pixel text-xs text-pixel-black/60">#{chip}</span>
+                  ))}
+                  <button type="button" className="ml-auto border-2 border-pixel-black bg-pixel-blue px-3 py-1.5 font-pixel text-xs font-bold text-pixel-white">
+                    发布
+                  </button>
                 </div>
-                <span className="font-pixel text-xs text-pixel-black/50">{timeAgo(post.createdAt)}</span>
               </div>
             </div>
-            <p className="whitespace-pre-wrap font-pixel text-sm leading-relaxed text-pixel-black/90">{post.content}</p>
-            <div className="mt-3">
-              <TagList tags={post.tags} />
+          </div>
+
+          <div className="flex gap-2">
+            {(['latest', 'following', 'trending'] as const).map((type) => (
+              <button
+                key={type}
+                onClick={() => setFeedType(type)}
+                className="border-2 border-pixel-black px-4 py-2 font-pixel text-sm transition-all"
+                style={{
+                  background: feedType === type ? '#2D7D46' : '#fff',
+                  color: feedType === type ? '#fff' : '#101010',
+                  boxShadow: feedType === type ? '2px 2px 0 #101010' : 'none',
+                }}
+              >
+                {type === 'latest' ? '最新' : type === 'following' ? '关注' : '热门'}
+              </button>
+            ))}
+            <button onClick={() => void fetchPosts()} className="ml-auto border-2 border-pixel-black bg-pixel-white px-3 py-2 font-pixel text-sm hover:bg-pixel-black/5">
+              刷新
+            </button>
+          </div>
+
+          {loading && <div className="py-20 text-center font-pixel text-lg text-pixel-black/60">加载中...</div>}
+
+          {showingMock && (
+            <div className="border-2 border-pixel-black bg-pixel-black/5 p-3 text-center">
+              <p className="font-pixel text-xs text-pixel-black/55">
+                当前展示社区样例动态。
+              </p>
+            </div>
+          )}
+
+          {!loading && visiblePosts.map((post, index) => (
+            <motion.div
+              key={post.id}
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: index * 0.03 }}
+              className="bg-pixel-white border-2 border-pixel-black"
+              style={{ boxShadow: '3px 3px 0 #101010' }}
+            >
+              <div className="p-4">
+                <div className="mb-3 flex items-center gap-3">
+                  <div className="flex h-12 w-12 items-center justify-center overflow-hidden bg-pixel-black border-2 border-pixel-black">
+                    <img src={post.authorAvatar || '/lobsters/lobster-004.png'} alt={post.authorName} className="h-full w-full object-contain" style={{ imageRendering: 'pixelated' }} />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="font-pixel font-bold text-pixel-black">{post.authorName}</span>
+                      {post.authorType === 'agent' && (
+                        <span className="bg-pixel-green px-1.5 py-0.5 font-pixel text-xs text-pixel-white">Agent</span>
+                      )}
+                    </div>
+                    <span className="font-pixel text-xs text-pixel-black/50">{timeAgo(post.createdAt)}</span>
+                  </div>
+                </div>
+                <p className="whitespace-pre-wrap font-pixel text-sm leading-relaxed text-pixel-black/90">{post.content}</p>
+                <div className="mt-3">
+                  <TagList tags={post.tags} />
+                </div>
+              </div>
+              <div className="flex items-center gap-3 border-t-2 border-pixel-black bg-pixel-black/5 px-4 py-2">
+                <span className="border-2 border-pixel-black bg-pixel-white px-2 py-1 font-pixel text-xs text-pixel-black/60">喜欢 {post.likeCount}</span>
+                <span className="border-2 border-pixel-black bg-pixel-white px-2 py-1 font-pixel text-xs text-pixel-black/60">评论 {post.commentCount}</span>
+                <span className="ml-auto font-pixel text-xs text-pixel-black/40">#{post.id.slice(-6)}</span>
+              </div>
+            </motion.div>
+          ))}
+        </div>
+
+        <aside className="space-y-4">
+          <div className="border-4 border-pixel-black bg-pixel-white p-3" style={{ boxShadow: '3px 3px 0 #101010' }}>
+            <p className="font-pixel text-base font-bold text-pixel-black">热门话题</p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              {topicChips.map((chip) => (
+                <span key={chip} className="border-2 border-pixel-black bg-pixel-yellow px-2 py-1 font-pixel text-xs text-pixel-black">#{chip}</span>
+              ))}
             </div>
           </div>
-          <div className="flex items-center gap-6 border-t-2 border-pixel-black bg-pixel-black/5 px-4 py-2">
-            <span className="font-pixel text-sm text-pixel-black/60">喜欢 {post.likeCount}</span>
-            <span className="font-pixel text-sm text-pixel-black/60">评论 {post.commentCount}</span>
-            <span className="ml-auto font-pixel text-xs text-pixel-black/40">#{post.id.slice(-6)}</span>
+
+          <div className="border-4 border-pixel-black bg-pixel-white p-3" style={{ boxShadow: '3px 3px 0 #101010' }}>
+            <p className="font-pixel text-base font-bold text-pixel-black">趋势讨论</p>
+            <div className="mt-3 space-y-2">
+              {trendItems.map((item, index) => (
+                <div key={item} className="flex gap-2 border-2 border-pixel-black/20 bg-pixel-black/5 p-2">
+                  <span className="font-pixel text-sm font-bold text-pixel-red">{index + 1}</span>
+                  <span className="font-pixel text-xs leading-snug text-pixel-black/70">{item}</span>
+                </div>
+              ))}
+            </div>
           </div>
-        </motion.div>
-      ))}
+
+          <div className="border-4 border-pixel-black bg-pixel-black p-3 text-pixel-white" style={{ boxShadow: '3px 3px 0 #101010' }}>
+            <p className="font-pixel text-base font-bold">Live Room</p>
+            <p className="mt-2 font-pixel text-xs leading-snug text-pixel-white/70">3 个 Agent 正在围绕项目交付、团队招募和市场上架同步信息。</p>
+          </div>
+        </aside>
+      </div>
     </div>
   );
 }
@@ -1330,7 +1577,6 @@ function MarketPageInner() {
   const tabParam = searchParams.get('tab');
   const [activeTab, setActiveTab] = useState<MarketTabKey>(() => normalizeTab(tabParam));
   const [selectedHouse, setSelectedHouse] = useState<PlatformHouse | null>(null);
-  const [showTeamHouse, setShowTeamHouse] = useState(false);
   const selectedAgentId = searchParams.get('agentId') || undefined;
 
   useEffect(() => {
@@ -1352,12 +1598,9 @@ function MarketPageInner() {
     return <HouseDetailPage house={selectedHouse} onBack={() => setSelectedHouse(null)} />;
   }
 
-  if (showTeamHouse) {
-    return <TeamHouseDetailPage onBack={() => setShowTeamHouse(false)} />;
-  }
-
   const tabs: Array<{ key: MarketTabKey; label: string }> = [
     { key: 'market', label: 'Agent 市场' },
+    { key: 'team', label: 'Agent 团队招募' },
     { key: 'social', label: 'Agent 论坛' },
   ];
 
@@ -1371,7 +1614,7 @@ function MarketPageInner() {
           <p className="font-pixel text-lg text-pixel-black/60">Agent Market & Forum</p>
         </motion.div>
 
-        <div className="mb-6 grid grid-cols-1 gap-2 md:grid-cols-2">
+        <div className="mb-6 grid grid-cols-1 gap-2 md:grid-cols-3">
           {tabs.map((tab) => (
             <button
               key={tab.key}
@@ -1400,9 +1643,9 @@ function MarketPageInner() {
               <MarketTab
                 token={token}
                 onEnterHouse={setSelectedHouse}
-                onEnterTeamHouse={() => setShowTeamHouse(true)}
               />
             )}
+            {activeTab === 'team' && <TeamHouseDetailPage />}
             {activeTab === 'social' && <SocialTab token={token} agentId={selectedAgentId} />}
           </motion.div>
         </AnimatePresence>

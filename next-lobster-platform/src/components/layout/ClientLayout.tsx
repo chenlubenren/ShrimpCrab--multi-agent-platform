@@ -10,6 +10,8 @@ import { MobileAppNav } from '@/components/layout/MobileAppNav';
 import { useDesktopDisplayMode } from '@/lib/desktopDisplayMode';
 import { useOpenClawDesktopBridge } from '@/lib/desktop';
 import { useAuthStore } from '@/store/useAuthStore';
+import { useStore } from '@/store/useStore';
+import type { Project } from '@/types';
 
 interface ClientLayoutProps {
   children: React.ReactNode;
@@ -27,6 +29,12 @@ const HOME_INTRO_COMPLETE_EVENT = 'openclaw:home-intro-complete';
 
 function clampSidebarWidth(value: number) {
   return Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, value));
+}
+
+function projectSortTime(project: Project) {
+  const value = project.lastOpenedAt || project.updatedAt || project.createdAt;
+  const time = value ? new Date(value).getTime() : 0;
+  return Number.isFinite(time) ? time : 0;
 }
 
 function TraditionalSidebarIcon({ icon, className = 'h-5 w-5' }: { icon: SidebarIcon; className?: string }) {
@@ -84,12 +92,14 @@ function TraditionalDesktopSidebar({
   open,
   pathname,
   width,
+  projects,
   onWidthChange,
   onToggle,
 }: {
   open: boolean;
   pathname: string;
   width: number;
+  projects: Project[];
   onWidthChange: (width: number) => void;
   onToggle: () => void;
 }) {
@@ -97,11 +107,13 @@ function TraditionalDesktopSidebar({
     { href: '/', label: '首页', icon: 'home', tone: 'bg-pixel-green', exact: true },
     { href: '/my-den', label: '我的 Agent 窝', icon: 'agents', tone: 'bg-pixel-red' },
     { href: '/architectures/mine', label: '我的团队', icon: 'teams', tone: 'bg-pixel-blue' },
-    { href: '/projects', label: '我的项目', icon: 'projects', tone: 'bg-pixel-yellow' },
     { href: '/agent-tea-party', label: 'Agent 茶话会', icon: 'tea', tone: 'bg-pixel-red' },
     { href: '/market', label: 'Agent 世界', icon: 'market', tone: 'bg-pixel-yellow' },
     { href: '/settings/providers', label: '供应商设置', icon: 'settings', tone: 'bg-pixel-gray' },
   ];
+  const recentProjects = [...projects]
+    .sort((a, b) => projectSortTime(b) - projectSortTime(a))
+    .slice(0, 7);
 
   const handleResizePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -189,6 +201,47 @@ function TraditionalDesktopSidebar({
                 </motion.div>
               );
             })}
+
+            {recentProjects.length > 0 && (
+              <div className="pt-2">
+                <div className="my-3 h-[4px] border-y border-pixel-black bg-pixel-gray" aria-hidden="true" />
+                <p className="mb-2 px-1 font-pixel text-xs leading-none text-pixel-white/45">最近项目</p>
+                <div className="space-y-1.5">
+                  {recentProjects.map((project, index) => {
+                    const href = `/projects/${project.id}`;
+                    const active = pathname === href;
+                    return (
+                      <motion.div
+                        key={project.id}
+                        initial={{ opacity: 0, x: -16 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        transition={{ delay: 0.035 * (navItems.length + index) }}
+                      >
+                        <Link
+                          href={href}
+                          className={`flex min-h-[48px] items-center gap-2 border-2 px-2 font-pixel text-sm no-underline transition-colors ${
+                            active
+                              ? 'border-pixel-gray bg-pixel-white/15 text-pixel-white'
+                              : 'border-transparent text-pixel-white/65 hover:border-pixel-gray hover:bg-pixel-white/10 hover:text-pixel-white'
+                          }`}
+                          title={project.name}
+                        >
+                          <span className="flex h-7 w-7 shrink-0 items-center justify-center border-2 border-pixel-black bg-pixel-gray text-pixel-white">
+                            <TraditionalSidebarIcon icon="projects" className="h-4 w-4" />
+                          </span>
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate leading-tight">{project.name}</span>
+                            <span className="block truncate text-[10px] leading-tight text-pixel-white/38">
+                              {project.teamIds.length} 团队 · {(project.agentIds || []).length} Agent
+                            </span>
+                          </span>
+                        </Link>
+                      </motion.div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </nav>
 
           <div className="border-t-4 border-pixel-gray/50 p-3">
@@ -231,6 +284,7 @@ export function ClientLayout({ children }: ClientLayoutProps) {
   const pathname = usePathname();
   const [desktopDisplayMode] = useDesktopDisplayMode();
   const { token, hasHydrated } = useAuthStore();
+  const projects = useStore((state) => state.projects);
   const desktopBridge = useOpenClawDesktopBridge();
   const [isDesktopViewport, setIsDesktopViewport] = useState(false);
   const [homeIntroActive, setHomeIntroActive] = useState(pathname === '/');
@@ -242,6 +296,7 @@ export function ClientLayout({ children }: ClientLayoutProps) {
   const isMobileChatRoute = pathname.startsWith('/agent/') || pathname.startsWith('/agent-tea-party');
   const isTraditionalMode = desktopDisplayMode === 'traditional';
   const isTraditionalHome = pathname === '/' && isTraditionalMode;
+  const isProjectDetailRoute = /^\/projects\/[^/]+/.test(pathname);
   const mainClassName = isMobileChatRoute
     ? isTraditionalMode
       ? 'h-[100dvh] min-h-[100dvh] max-w-none overflow-hidden bg-pixel-cream p-0 pb-0 md:mx-auto md:h-auto md:min-h-[calc(100vh-120px)] md:w-full md:max-w-none md:overflow-visible md:bg-pixel-white md:p-0'
@@ -313,6 +368,12 @@ export function ClientLayout({ children }: ClientLayoutProps) {
     }
   }, [homeIntroActive, isDesktopViewport, isTraditionalMode, pathname]);
 
+  useEffect(() => {
+    if (isProjectDetailRoute && isTraditionalMode && isDesktopViewport) {
+      setTraditionalSidebarOpen(false);
+    }
+  }, [isDesktopViewport, isProjectDetailRoute, isTraditionalMode]);
+
   const traditionalShellActive = isTraditionalMode && isDesktopViewport;
   const traditionalSidebarEnabled = traditionalShellActive && !isRouteGuardBlocking && !homeIntroActive;
   const effectiveTraditionalSidebarOpen = traditionalSidebarEnabled && traditionalSidebarOpen;
@@ -338,6 +399,7 @@ export function ClientLayout({ children }: ClientLayoutProps) {
                   open={traditionalSidebarOpen}
                   pathname={pathname}
                   width={traditionalSidebarWidth}
+                  projects={projects}
                   onWidthChange={setTraditionalSidebarWidth}
                   onToggle={() => setTraditionalSidebarOpen((open) => !open)}
                 />
