@@ -74,6 +74,12 @@ router.post('/execute', async (req: AuthenticatedRequest, res: Response) => {
 });
 
 router.get('/executions', async (req: AuthenticatedRequest, res: Response) => {
+  const projectId = typeof req.query.projectId === 'string' ? req.query.projectId : undefined;
+  if (projectId) {
+    const executions = workflowExecutor.loadProjectExecutions(req.user!.userId, projectId);
+    res.json({ executions });
+    return;
+  }
   res.json({ executions: workflowExecutor.list(req.user!.userId) });
 });
 

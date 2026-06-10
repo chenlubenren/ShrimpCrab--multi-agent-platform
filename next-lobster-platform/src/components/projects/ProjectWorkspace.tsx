@@ -7,20 +7,28 @@ import { ArchitectureInfo } from '@/components/architecture/ArchitectureInfo';
 import { NodeFlowPreview } from '@/components/architecture/NodeFlowPreview';
 import { PixelButton } from '@/components/ui/PixelButton';
 import { PixelInput } from '@/components/ui/PixelInput';
-import { fetchProjectFileContent, fetchProjectFiles, fetchWorkflowExecution, startWorkflowExecution } from '@/lib/api';
+import { fetchProjectDeliverables, fetchProjectExecutions, fetchProjectFileContent, fetchProjectFiles, fetchWorkflowExecution, reviewProjectDeliverable, startWorkflowExecution } from '@/lib/api';
+import { API_BASE } from '@/lib/runtime';
 import { useOpenClawDesktopBridge } from '@/lib/desktop';
 import { buildWorkflowDslFromCanvas } from '@/lib/workflowDsl';
 import { useStore } from '@/store/useStore';
+import { useAuthStore } from '@/store/useAuthStore';
+import { useWorkflowEvents } from '@/hooks/useWorkflowEvents';
+import { WorkflowTaskBoard } from '@/components/projects/WorkflowTaskBoard';
 import type {
   Architecture,
+  Deliverable,
   Lobster,
   Project,
   ProjectFileContent,
   ProjectFileNode,
   ProjectFileTree,
   WorkflowDsl,
+  WorkflowEventDelta,
   WorkflowExecution,
+  WorkflowExecutionEvent,
   WorkflowExecutionStatus,
+  WorkflowNodeStateSummary,
 } from '@/types';
 
 const TERMINAL_STATUSES: WorkflowExecutionStatus[] = ['succeeded', 'failed', 'cancelled'];
@@ -28,6 +36,7 @@ const FILE_PANEL_DEFAULT_WIDTH = 320;
 const FILE_PANEL_MIN_WIDTH = 220;
 const FILE_PANEL_MAX_WIDTH = 520;
 const WORKFLOW_POLL_INTERVAL_MS = 1500;
+const WORKFLOW_POLL_FALLBACK_INTERVAL_MS = 5000;
 const WORKFLOW_MAX_CONSECUTIVE_POLL_ERRORS = 8;
 const WORKFLOW_MIN_POLL_MS = 5 * 60 * 1000;
 const WORKFLOW_MAX_POLL_MS = 60 * 60 * 1000;
@@ -95,6 +104,16 @@ export function ProjectWorkspace({
   const [chatDraft, setChatDraft] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [latestExecution, setLatestExecution] = useState<WorkflowExecution | null>(null);
+  const [deliverables, setDeliverables] = useState<Deliverable[]>([]);
+  const [reviewingDeliverableId, setReviewingDeliverableId] = useState<string | null>(null);
+  const token = useAuthStore((state) => state.token);
+  /** Event ids already rendered into chat, to avoid duplicates between WS / history replay. */
+  const seenEventIdsRef = useRef<Set<string>>(new Set());
+  /** executionId -> chat session that launched it (so WS reports land in the right session). */
+  const executionSessionRef = useRef<Record<string, { teamKey: string; sessionId: string }>>({});
+  /** Execution currently tracked by the submitChat polling loop (final reply owner). */
+  const activePollingExecutionRef = useRef<string | null>(null);
+  const wsConnectedRef = useRef(false);
   const activeTarget = activeMode === 'agent' ? activeAgent : activeTeam;
   const activeTargetKey = `${activeMode}:${activeTarget?.id || 'unbound'}`;
   const activeTargetSessions = sessionsByTeamId[activeTargetKey] || [];
@@ -155,6 +174,80 @@ export function ProjectWorkspace({
     }));
   }, [activeMode, activeSession, activeTarget?.name, activeTargetKey, project]);
 
+  useEffect(() => {
+    if (!project.id) return;
+    let cancelled = false;
+    fetchProjectExecutions(project.id).then((executions) => {
+      if (cancelled || executions.length === 0) return;
+      const latest = executions[0];
+      setLatestExecution(latest as unknown as WorkflowExecution);
+
+      const teamKey = latest.architectureId
+        ? `team:${latest.architectureId}`
+        : `agent:${latest.projectId || 'unbound'}`;
+
+      const historyMessages: ChatMessage[] = [];
+      historyMessages.push({
+        id: `hist-task-${latest.id}`,
+        role: 'user',
+        content: latest.task,
+        timestamp: latest.createdAt,
+      });
+
+      const nodeEvents = (latest.events || []).filter(
+        (e: any) => e.type === 'node_completed' || e.type === 'node_failed'
+      );
+      for (const evt of nodeEvents) {
+        seenEventIdsRef.current.add(evt.id);
+        const nodeState = evt.nodeId ? latest.nodeStates?.[evt.nodeId] : undefined;
+        if (nodeState && nodeState.type !== 'agent') continue;
+        historyMessages.push({
+          id: evt.id,
+          role: evt.type === 'node_failed' ? 'error' : 'assistant',
+          content: nodeState
+            ? buildNodeReportContent(evt, nodeState)
+            : evt.message,
+          timestamp: evt.timestamp,
+          agentName: (evt as any).agentName || nodeState?.label,
+        });
+      }
+
+      if (latest.finalOutput) {
+        historyMessages.push({
+          id: `hist-final-${latest.id}`,
+          role: 'assistant',
+          content: latest.finalOutput,
+          timestamp: latest.completedAt || latest.updatedAt || latest.createdAt,
+          agentName: latest.workflowName,
+        });
+      } else if (latest.error) {
+        historyMessages.push({
+          id: `hist-err-${latest.id}`,
+          role: 'error',
+          content: latest.error,
+          timestamp: latest.completedAt || latest.updatedAt || latest.createdAt,
+        });
+      }
+
+      if (historyMessages.length > 0) {
+        setSessionsByTeamId((current) => {
+          const sessions = current[teamKey] || [];
+          const session = sessions[0];
+          if (!session) return current;
+          return {
+            ...current,
+            [teamKey]: sessions.map((s) =>
+              s.id === session.id
+                ? { ...s, messages: [...s.messages, ...historyMessages] }
+                : s
+            ),
+          };
+        });
+      }
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [project.id]);
+
   const appendMessage = useCallback((teamKey: string, sessionId: string, message: ChatMessage) => {
     setSessionsByTeamId((current) => ({
       ...current,
@@ -163,6 +256,140 @@ export function ProjectWorkspace({
       ),
     }));
   }, []);
+
+  /** Append a workflow report message to the session that launched the execution (or the newest one). */
+  const appendWorkflowReport = useCallback((teamKey: string, executionId: string, message: ChatMessage) => {
+    setSessionsByTeamId((current) => {
+      const sessions = current[teamKey] || [];
+      if (sessions.length === 0) return current;
+      const mapping = executionSessionRef.current[executionId];
+      const targetId = mapping && sessions.some((session) => session.id === mapping.sessionId)
+        ? mapping.sessionId
+        : sessions[0].id;
+      return {
+        ...current,
+        [teamKey]: sessions.map((session) =>
+          session.id === targetId ? { ...session, messages: [...session.messages, message] } : session
+        ),
+      };
+    });
+  }, []);
+
+  const handleWorkflowDelta = useCallback((delta: WorkflowEventDelta) => {
+    // Merge the lightweight delta into the tracked execution
+    setLatestExecution((current) => {
+      if (current && current.id === delta.executionId) {
+        const nodeStates = { ...current.nodeStates };
+        for (const summary of delta.nodeStates) {
+          nodeStates[summary.nodeId] = { ...nodeStates[summary.nodeId], ...summary };
+        }
+        return {
+          ...current,
+          status: delta.status,
+          currentNodeIds: delta.currentNodeIds,
+          nodeStates,
+          finalOutput: delta.finalOutput ?? current.finalOutput,
+          error: delta.error ?? current.error,
+        };
+      }
+      // Unknown execution (e.g. started before page load): fetch the full snapshot once
+      void fetchWorkflowExecution(delta.executionId)
+        .then((full) => setLatestExecution(full))
+        .catch(() => {});
+      return current;
+    });
+
+    const evt = delta.event;
+    if (seenEventIdsRef.current.has(evt.id)) return;
+
+    if (evt.type === 'deliverable_created') {
+      seenEventIdsRef.current.add(evt.id);
+      const created = evt.details?.deliverable as Deliverable | undefined;
+      if (created) {
+        setDeliverables((current) => [
+          created,
+          ...current.map((item) =>
+            item.filePath === created.filePath && item.status === 'pending'
+              ? { ...item, status: 'superseded' as const }
+              : item
+          ),
+        ]);
+      }
+      return;
+    }
+
+    const teamKey = delta.architectureId
+      ? `team:${delta.architectureId}`
+      : `agent:${delta.projectId || 'unbound'}`;
+
+    if (evt.type === 'node_completed' || evt.type === 'node_failed') {
+      const nodeState = delta.nodeStates.find((state) => state.nodeId === evt.nodeId);
+      if (nodeState && nodeState.type === 'agent') {
+        seenEventIdsRef.current.add(evt.id);
+        appendWorkflowReport(teamKey, delta.executionId, {
+          id: evt.id,
+          role: evt.type === 'node_failed' ? 'error' : 'assistant',
+          content: buildNodeReportContent(evt, nodeState),
+          timestamp: evt.timestamp,
+          agentName: evt.agentName || nodeState.label,
+        });
+      }
+      return;
+    }
+
+    // Final execution summary — only when no submitChat polling loop owns this execution
+    if (
+      (evt.type === 'execution_completed' || evt.type === 'execution_failed' || evt.type === 'execution_cancelled') &&
+      activePollingExecutionRef.current !== delta.executionId
+    ) {
+      seenEventIdsRef.current.add(evt.id);
+      const content = evt.type === 'execution_completed'
+        ? shortText(delta.finalOutput || '团队任务执行完成。', 1800)
+        : evt.type === 'execution_cancelled'
+          ? '执行已取消。'
+          : delta.error || '执行失败。';
+      appendWorkflowReport(teamKey, delta.executionId, {
+        id: evt.id,
+        role: evt.type === 'execution_failed' ? 'error' : 'assistant',
+        content,
+        timestamp: evt.timestamp,
+        agentName: delta.workflowName,
+      });
+    }
+  }, [appendWorkflowReport]);
+
+  const { isConnected: workflowWsConnected } = useWorkflowEvents({
+    token,
+    projectId: project.id,
+    onEvent: handleWorkflowDelta,
+  });
+
+  useEffect(() => {
+    wsConnectedRef.current = workflowWsConnected;
+  }, [workflowWsConnected]);
+
+  useEffect(() => {
+    if (!project.id) return;
+    let cancelled = false;
+    fetchProjectDeliverables(project.id)
+      .then((items) => {
+        if (!cancelled) setDeliverables(items);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [project.id]);
+
+  const reviewDeliverable = useCallback(async (deliverableId: string, status: 'accepted' | 'revision') => {
+    setReviewingDeliverableId(deliverableId);
+    try {
+      const updated = await reviewProjectDeliverable(project.id, deliverableId, status);
+      setDeliverables((current) => current.map((item) => (item.id === updated.id ? updated : item)));
+    } catch {
+      // keep current state; user can retry
+    } finally {
+      setReviewingDeliverableId(null);
+    }
+  }, [project.id]);
 
   const openFilePreview = useCallback(async (relativePath: string) => {
     setPreview({ path: relativePath, loading: true });
@@ -276,6 +503,8 @@ export function ProjectWorkspace({
         projectId: project.id,
       });
       setLatestExecution(started);
+      executionSessionRef.current[started.id] = { teamKey: activeTargetKey, sessionId };
+      activePollingExecutionRef.current = started.id;
       appendMessage(activeTargetKey, sessionId, makeMessage('system', `已提交给「${activeTeam.name}」，执行编号：${started.id}`));
 
       let current = started;
@@ -283,11 +512,14 @@ export function ProjectWorkspace({
       const maxPollAttempts = getWorkflowPollAttemptLimit(activeDsl);
       for (let attempt = 0; attempt < maxPollAttempts; attempt += 1) {
         if (TERMINAL_STATUSES.includes(current.status)) break;
-        await sleep(WORKFLOW_POLL_INTERVAL_MS);
+        // WS connected: events stream in real time, polling is just a safety net
+        await sleep(wsConnectedRef.current ? WORKFLOW_POLL_FALLBACK_INTERVAL_MS : WORKFLOW_POLL_INTERVAL_MS);
         try {
           current = await fetchWorkflowExecution(started.id);
           consecutivePollErrors = 0;
-          setLatestExecution(current);
+          if (!wsConnectedRef.current) {
+            setLatestExecution(current);
+          }
         } catch (pollError) {
           consecutivePollErrors += 1;
           if (consecutivePollErrors >= WORKFLOW_MAX_CONSECUTIVE_POLL_ERRORS) {
@@ -306,6 +538,7 @@ export function ProjectWorkspace({
     } catch (error) {
       appendMessage(activeTargetKey, sessionId, makeMessage('error', error instanceof Error ? error.message : '执行任务失败'));
     } finally {
+      activePollingExecutionRef.current = null;
       setIsSubmitting(false);
     }
   };
@@ -410,7 +643,6 @@ export function ProjectWorkspace({
                   </div>
                 )}
                 {activeSession?.messages.map((message) => <MessageBubble key={message.id} message={message} />)}
-                {latestExecution && <PlanProgressPanel execution={latestExecution} expanded />}
               </div>
             </div>
 
@@ -442,9 +674,17 @@ export function ProjectWorkspace({
             </div>
           </div>
         </div>
+
+        <WorkflowTaskBoard
+          execution={latestExecution}
+          deliverables={deliverables}
+          onOpenFile={(relativePath) => void openFilePreview(relativePath)}
+          onReviewDeliverable={(deliverableId, status) => void reviewDeliverable(deliverableId, status)}
+          reviewingDeliverableId={reviewingDeliverableId}
+        />
       </div>
 
-      {preview && <FilePreviewModal preview={preview} onClose={() => setPreview(null)} />}
+      {preview && <FilePreviewModal preview={preview} projectId={project.id} onClose={() => setPreview(null)} />}
       {teamBindingOpen && (
         <TeamBindingModal
           teams={architectures}
@@ -609,10 +849,10 @@ function FileTreeNode({
   };
   return (
     <div>
-      <button type="button" onClick={handleClick} onDoubleClick={() => !node.isDirectory && onOpenFile(node.relativePath)} title={node.relativePath} className="flex h-6 w-full items-center gap-1 overflow-hidden whitespace-nowrap pr-2 text-left hover:bg-pixel-yellow/30" style={{ paddingLeft }}>
+      <button type="button" onClick={handleClick} onDoubleClick={() => !node.isDirectory && onOpenFile(node.relativePath)} title={getNodeTooltip(node)} className="flex h-6 w-full items-center gap-1 overflow-hidden whitespace-nowrap pr-2 text-left hover:bg-pixel-yellow/30" style={{ paddingLeft }}>
         <span className="w-3 shrink-0 text-center text-[10px] text-pixel-black/45">{node.isDirectory ? (expanded ? '-' : '+') : ''}</span>
-        <span className={`w-8 shrink-0 text-[10px] ${node.isDirectory ? 'text-pixel-orange' : 'text-pixel-blue'}`}>{node.isDirectory ? 'DIR' : fileExtLabel(node.name)}</span>
-        <span className="min-w-0 flex-1 truncate">{node.name}</span>
+        <span className={`w-8 shrink-0 text-[10px] ${node.isDirectory ? 'text-pixel-orange' : node.name.endsWith('.pdf') ? 'text-pixel-red font-bold' : 'text-pixel-blue'}`}>{node.isDirectory ? 'DIR' : fileExtLabel(node.name)}</span>
+        <span className={`min-w-0 flex-1 truncate ${node.name.endsWith('.pdf') ? 'font-bold text-pixel-red' : ''}`}>{FILE_DESCRIPTIONS[node.name] || (node.isDirectory && DIR_DESCRIPTIONS[node.name] ? `${node.name} ${DIR_DESCRIPTIONS[node.name]}` : node.name)}</span>
       </button>
       {node.isDirectory && expanded && hasChildren && node.children?.map((child) => (
         <FileTreeNode key={child.relativePath} node={child} depth={depth + 1} expandedPaths={expandedPaths} touchLike={touchLike} onToggle={onToggle} onOpenFile={onOpenFile} />
@@ -783,19 +1023,64 @@ function PlanProgressPanel({ execution, expanded = false }: { execution: Workflo
   );
 }
 
-function FilePreviewModal({ preview, onClose }: { preview: FilePreviewState; onClose: () => void }) {
+function FilePreviewModal({ preview, projectId, onClose }: { preview: FilePreviewState; projectId: string; onClose: () => void }) {
   const file = preview.file;
+
+  const handleDownload = async () => {
+    let token = '';
+    try {
+      const raw = localStorage.getItem('lobster-auth');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        token = parsed?.state?.token || '';
+      }
+    } catch { /* ignore */ }
+    const response = await fetch(`${API_BASE}/api/projects/${projectId}/files/download?path=${encodeURIComponent(preview.path)}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!response.ok) return;
+    const blob = await response.blob();
+    const objectUrl = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = objectUrl;
+    link.download = file?.name || preview.path.split('/').pop() || 'download';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(objectUrl);
+  };
+
   return (
     <ModalFrame title={file?.name || preview.path} onClose={onClose} maxWidthClass="max-w-6xl">
       <div className="mb-3 flex flex-wrap items-center gap-2 font-pixel text-xs text-pixel-black/60">
         <span className="border-2 border-pixel-black bg-pixel-white px-2 py-1">{preview.path}</span>
         {file && <span>{formatFileSize(file.size)}</span>}
         {file?.truncated && <span className="text-pixel-red">预览已截断</span>}
+        <button
+          type="button"
+          onClick={handleDownload}
+          className="border-2 border-pixel-black bg-pixel-blue px-3 py-1 font-pixel text-xs text-pixel-white hover:brightness-95"
+          style={{ boxShadow: '2px 2px 0px 0px #101010' }}
+        >
+          下载文件
+        </button>
       </div>
       <div className="max-h-[70vh] overflow-auto border-4 border-pixel-black bg-[#101418] p-3">
         {preview.loading && <p className="font-pixel text-sm text-pixel-white/70">读取文件中...</p>}
         {preview.error && <p className="font-pixel text-sm text-pixel-red">{preview.error}</p>}
-        {file?.binary && <p className="font-pixel text-sm text-pixel-white/70">这是二进制文件，暂不直接预览内容。</p>}
+        {file?.binary && (
+          <div className="flex flex-col items-center gap-4 py-8">
+            <p className="font-pixel text-sm text-pixel-white/70">这是二进制文件，暂不直接预览内容。</p>
+            <button
+              type="button"
+              onClick={handleDownload}
+              className="border-4 border-pixel-black bg-pixel-green px-6 py-3 font-pixel text-base text-pixel-white hover:brightness-95"
+              style={{ boxShadow: '4px 4px 0px 0px #101010' }}
+            >
+              下载 {file.name || preview.path.split('/').pop()}
+            </button>
+          </div>
+        )}
         {file && !file.binary && <pre className="whitespace-pre-wrap break-words font-mono text-xs leading-5 text-[#d5dde5]">{file.content || '空文件'}</pre>}
       </div>
     </ModalFrame>
@@ -1059,9 +1344,40 @@ function getExecutionProgress(execution: WorkflowExecution | null): { completed:
   return { completed, total, percent };
 }
 
+const DIR_DESCRIPTIONS: Record<string, string> = {
+  '01-literature': '文献资料',
+  '02-experiment': '实验数据',
+  '03-paper': '论文产出',
+  'sections': '章节',
+  'figures': '图表',
+  'results': '结果',
+};
+
+const FILE_DESCRIPTIONS: Record<string, string> = {
+  'main.tex': '论文主文件 (LaTeX)',
+  'main.pdf': '论文 PDF',
+  'references.bib': '参考文献库',
+  'PAPER_SUMMARY.md': '论文摘要',
+  'EXPERIMENT_REPORT.md': '实验报告',
+  'RESEARCH_DIRECTION.md': '研究方向',
+  'PIPELINE_STATE.json': '流水线状态',
+  'LITERATURE_SEARCH_STRATEGY.md': '检索策略',
+  'LITERATURE_DATABASE.csv': '文献数据库',
+};
+
 function fileExtLabel(name: string): string {
   const ext = name.includes('.') ? name.split('.').pop()?.slice(0, 3).toUpperCase() : '';
   return ext || 'FILE';
+}
+
+function getNodeTooltip(node: ProjectFileNode): string {
+  if (node.isDirectory && DIR_DESCRIPTIONS[node.name]) {
+    return `${DIR_DESCRIPTIONS[node.name]} - ${node.relativePath}`;
+  }
+  if (!node.isDirectory && FILE_DESCRIPTIONS[node.name]) {
+    return FILE_DESCRIPTIONS[node.name];
+  }
+  return node.relativePath;
 }
 
 function formatFileSize(size: number): string {
@@ -1101,4 +1417,68 @@ function sleep(ms: number): Promise<void> {
 function shortText(value: string, maxLength: number): string {
   const normalized = value.trim();
   return normalized.length > maxLength ? `${normalized.slice(0, maxLength)}...` : normalized;
+}
+
+function formatDuration(startedAt?: string, completedAt?: string): string {
+  if (!startedAt || !completedAt) return '';
+  const ms = new Date(completedAt).getTime() - new Date(startedAt).getTime();
+  if (!Number.isFinite(ms) || ms < 0) return '';
+  const totalSec = Math.round(ms / 1000);
+  if (totalSec < 60) return `${totalSec} 秒`;
+  const min = Math.floor(totalSec / 60);
+  const sec = totalSec % 60;
+  if (min < 60) return sec > 0 ? `${min} 分 ${sec} 秒` : `${min} 分钟`;
+  const hr = Math.floor(min / 60);
+  return `${hr} 小时 ${min % 60} 分`;
+}
+
+const SCAFFOLD_ARTIFACT_FILES = new Set([
+  'AGENTS.md',
+  'BOOTSTRAP.md',
+  'HEARTBEAT.md',
+  'IDENTITY.md',
+  'SOUL.md',
+  'TOOLS.md',
+  'USER.md',
+]);
+
+function isNoiseArtifactPath(relativePath: string): boolean {
+  if (!relativePath) return true;
+  const normalized = relativePath.replace(/^\.\//, '').replace(/\\/g, '/');
+  if (normalized.startsWith('handoff/')) return true;
+  const base = normalized.split('/').pop() || normalized;
+  return SCAFFOLD_ARTIFACT_FILES.has(base);
+}
+
+function buildNodeReportContent(
+  evt: WorkflowExecutionEvent,
+  state: Pick<WorkflowNodeStateSummary, 'error' | 'startedAt' | 'completedAt'>
+): string {
+  if (evt.type === 'node_failed') {
+    return `任务失败：${state.error || evt.message}`;
+  }
+  const degraded = evt.details?.degraded === true;
+  if (degraded) {
+    const reason =
+      (typeof evt.details?.degradedReason === 'string' && evt.details.degradedReason) ||
+      '该 Agent 的 CLI 不可用';
+    return [
+      `未真正执行（已降级）`,
+      `原因：${reason}`,
+      `请在「管理团队 → 配置团队 API Key」为该 Agent 绑定可用的 LLM 后重试。`,
+    ].join('\n');
+  }
+  const duration = formatDuration(state.startedAt, state.completedAt);
+  const header = duration ? `已完成任务（耗时 ${duration}）` : '已完成任务';
+  const output = typeof evt.details?.output === 'string' ? shortText(evt.details.output, 600) : '';
+  const rawArtifacts = evt.details?.artifacts;
+  const artifacts = Array.isArray(rawArtifacts)
+    ? (rawArtifacts as Array<{ relativePath?: string; path?: string }>)
+        .filter((artifact) => !isNoiseArtifactPath(artifact.relativePath || artifact.path || ''))
+        .slice(0, 6)
+    : [];
+  const artifactLines = artifacts.length > 0
+    ? `\n\n产物：\n${artifacts.map((artifact) => `- ${artifact.relativePath || artifact.path || ''}`).join('\n')}`
+    : '';
+  return [header, output].filter(Boolean).join('\n\n') + artifactLines;
 }

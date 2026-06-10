@@ -319,6 +319,8 @@ export interface WorkflowNodeRunState {
   outputFilePath?: string;
   artifacts?: WorkflowArtifact[];
   error?: string;
+  degraded?: boolean;
+  degradedReason?: string;
   startedAt?: string;
   completedAt?: string;
   runCount: number;
@@ -344,6 +346,52 @@ export interface WorkflowExecutionEvent {
   agentName?: string;
   message: string;
   details?: Record<string, unknown>;
+}
+
+export type DeliverableStatus = 'pending' | 'accepted' | 'revision' | 'superseded';
+
+export interface Deliverable {
+  id: string;
+  userId: string;
+  projectId: string;
+  executionId: string;
+  nodeId?: string;
+  agentName?: string;
+  filePath: string;
+  kind: string;
+  status: DeliverableStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface WorkflowNodeStateSummary {
+  nodeId: string;
+  type: WorkflowNodeType;
+  label: string;
+  status: WorkflowNodeExecutionStatus;
+  agentInstanceId?: string;
+  agentName?: string;
+  kind?: WorkflowAgentKind;
+  task?: string;
+  startedAt?: string;
+  completedAt?: string;
+  runCount: number;
+  error?: string;
+  degraded?: boolean;
+}
+
+export interface WorkflowEventDelta {
+  executionId: string;
+  userId: string;
+  projectId?: string;
+  architectureId?: string;
+  workflowName: string;
+  status: WorkflowExecutionStatus;
+  currentNodeIds: string[];
+  event: WorkflowExecutionEvent;
+  nodeStates: WorkflowNodeStateSummary[];
+  finalOutput?: string;
+  error?: string;
 }
 
 export interface WorkflowExecution {

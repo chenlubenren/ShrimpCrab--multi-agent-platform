@@ -15,6 +15,11 @@ import {
   getCozeRuntimeInfo,
   listCozeMarketAgents,
 } from '../services/coze-market.service.js';
+import {
+  adoptTeamTemplate,
+  getTeamTemplateById,
+  listTeamTemplates,
+} from '../services/team-template.service.js';
 
 const router = Router();
 
@@ -74,6 +79,33 @@ router.get('/coze', async (req: Request, res: Response) => {
   }
 });
 
+// GET /api/market/team-templates - List available team templates
+router.get('/team-templates', async (_req: Request, res: Response) => {
+  try {
+    const templates = listTeamTemplates();
+    res.json({ templates });
+  } catch (error) {
+    console.error('Get team templates error:', error);
+    res.status(500).json({ message: '获取团队模板列表失败' });
+  }
+});
+
+// GET /api/market/team-templates/:id - Get a specific team template
+router.get('/team-templates/:id', async (req: Request, res: Response) => {
+  try {
+    const id = firstParam(req.params.id);
+    const template = getTeamTemplateById(id);
+    if (!template) {
+      res.status(404).json({ message: '团队模板不存在' });
+      return;
+    }
+    res.json({ template });
+  } catch (error) {
+    console.error('Get team template error:', error);
+    res.status(500).json({ message: '获取团队模板失败' });
+  }
+});
+
 // GET /api/market/:id - Get a specific market agent
 router.get('/:id', async (req: Request, res: Response) => {
   try {
@@ -129,6 +161,33 @@ router.post('/coze/:botId/deploy', async (req: AuthenticatedRequest, res: Respon
   } catch (error) {
     console.error('Deploy Coze agent error:', error);
     res.status(500).json({ message: '部署 Coze Agent 失败' });
+  }
+});
+
+// POST /api/market/team-templates/:id/adopt - Adopt a team template
+router.post('/team-templates/:id/adopt', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const userId = req.user!.userId;
+    const id = firstParam(req.params.id);
+    const teamName = typeof req.body?.teamName === 'string' ? req.body.teamName.trim() : undefined;
+
+    const result = await adoptTeamTemplate(userId, id, teamName);
+    if (!result.success) {
+      res.status(400).json({ message: result.error || '领养团队失败' });
+      return;
+    }
+
+    res.json({
+      success: true,
+      caveId: result.caveId,
+      caveName: result.caveName,
+      teamId: result.teamId,
+      agentIds: result.agentIds,
+      message: '团队领养成功！已创建 Agent 窝和团队架构。',
+    });
+  } catch (error) {
+    console.error('Adopt team template error:', error);
+    res.status(500).json({ message: '领养团队失败' });
   }
 });
 

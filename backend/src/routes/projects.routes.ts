@@ -1,4 +1,6 @@
 import { Router, Response } from 'express';
+import fs from 'fs';
+import path from 'path';
 import { authMiddleware, type AuthenticatedRequest } from '../middleware/auth.middleware.js';
 import {
   createProject,
@@ -10,10 +12,44 @@ import {
   touchProject,
   updateProject,
 } from '../services/project.service.js';
+import {
+  listProjectDeliverables,
+  reviewDeliverable,
+} from '../services/deliverable.service.js';
+import { resolveStoredPath } from '../services/workspace.service.js';
 
 const router = Router();
 
 router.use(authMiddleware);
+
+router.get('/:id/deliverables', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const deliverables = listProjectDeliverables(req.user!.userId, String(req.params.id));
+    res.json({ deliverables });
+  } catch (error) {
+    console.error('List deliverables error:', error);
+    res.status(500).json({ message: '获取交付物列表失败' });
+  }
+});
+
+router.patch('/:id/deliverables/:deliverableId', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const status = req.body?.status;
+    if (status !== 'accepted' && status !== 'revision') {
+      res.status(400).json({ message: 'status 必须是 accepted 或 revision' });
+      return;
+    }
+    const deliverable = reviewDeliverable(req.user!.userId, String(req.params.deliverableId), status);
+    if (!deliverable) {
+      res.status(404).json({ message: '交付物不存在' });
+      return;
+    }
+    res.json({ deliverable });
+  } catch (error) {
+    console.error('Review deliverable error:', error);
+    res.status(500).json({ message: '更新交付物状态失败' });
+  }
+});
 
 router.get('/', async (req: AuthenticatedRequest, res: Response) => {
   try {
@@ -65,6 +101,35 @@ router.get('/:id/files/content', async (req: AuthenticatedRequest, res: Response
     console.error('Read project file error:', error);
     res.status(400).json({
       message: error instanceof Error ? error.message : '读取文件内容失败',
+    });
+  }
+});
+
+router.get('/:id/files/download', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const project = await getProject(req.user!.userId, String(req.params.id));
+    if (!project) {
+      res.status(404).json({ message: '项目不存在' });
+      return;
+    }
+    const relativePath = typeof req.query.path === 'string' ? req.query.path : '';
+    if (!relativePath || relativePath.includes('..')) {
+      res.status(400).json({ message: '无效路径' });
+      return;
+    }
+    const absolutePath = path.join(resolveStoredPath(project.workspacePath), relativePath);
+    if (!fs.existsSync(absolutePath)) {
+      res.status(404).json({ message: '文件不存在' });
+      return;
+    }
+    const fileName = path.basename(relativePath);
+    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(fileName)}"`);
+    res.setHeader('Content-Type', 'application/octet-stream');
+    fs.createReadStream(absolutePath).pipe(res);
+  } catch (error) {
+    console.error('Download project file error:', error);
+    res.status(400).json({
+      message: error instanceof Error ? error.message : '下载文件失败',
     });
   }
 });

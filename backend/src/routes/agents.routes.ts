@@ -27,6 +27,7 @@ import {
 } from '../services/agent.service.js';
 import {
   adoptOfficialAgentToUser,
+  isAdoptPlatform,
   getPublishedMarketAgentForInstance,
   publishAgentToMarket,
   unpublishAgentFromMarket,
@@ -77,6 +78,19 @@ const TEA_PARTY_BOARD_WIDTH = 1800;
 const TEA_PARTY_NOTE_WIDTH = 220;
 const TEA_PARTY_NOTE_HEIGHT = 148;
 const TEA_PARTY_NOTE_START_Y = 118;
+const TEA_PARTY_RUNTIME_BLOCKED_ENTRIES = [
+  '.claude',
+  '.openclaw',
+  'AGENTS.md',
+  'BOOTSTRAP.md',
+  'HEARTBEAT.md',
+  'IDENTITY.md',
+  'MEMORY.md',
+  'TOOLS.md',
+  'USER.md',
+  'memory',
+  'skills',
+];
 type TeaPartyWhiteboardColumn = typeof TEA_PARTY_WHITEBOARD_COLUMNS[number];
 
 interface TeaPartyMemberInput {
@@ -273,9 +287,11 @@ function preferSelectedModel(models: string[], selectedModel?: string): string[]
 
 function prepareTeaPartyRuntimeWorkspace(workspacePath: string, sourceWorkspacePath: string): void {
   fs.mkdirSync(workspacePath, { recursive: true });
-  for (const entry of fs.readdirSync(workspacePath)) {
+  for (const entry of TEA_PARTY_RUNTIME_BLOCKED_ENTRIES) {
     const entryPath = path.join(workspacePath, entry);
-    fs.rmSync(entryPath, { recursive: true, force: true });
+    if (fs.existsSync(entryPath)) {
+      fs.rmSync(entryPath, { recursive: true, force: true });
+    }
   }
 
   const sourceSoulPath = path.join(resolveStoredPath(sourceWorkspacePath), 'SOUL.md');
@@ -1381,7 +1397,12 @@ router.post('/official-lobster/adopt', async (req: AuthenticatedRequest, res: Re
   try {
     const userId = req.user!.userId;
     const requestedName = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
-    const result = await adoptOfficialAgentToUser(userId, requestedName);
+    const rawPlatform = typeof req.body?.platform === 'string' ? req.body.platform.trim() : 'openclaw';
+    if (!isAdoptPlatform(rawPlatform)) {
+      res.status(400).json({ message: `不支持的平台类型: ${rawPlatform}` });
+      return;
+    }
+    const result = await adoptOfficialAgentToUser(userId, requestedName, rawPlatform);
 
     if (!result.success || !result.agentId) {
       res.status(400).json({ message: result.error || '官方 Agent 领养失败' });
@@ -1425,7 +1446,7 @@ router.patch('/:id', async (req: AuthenticatedRequest, res: Response) => {
   try {
     const userId = req.user!.userId;
     const id = String(req.params.id);
-    const { name, description, avatar, tags, status } = req.body;
+    const { name, description, avatar, tags, status, caveId } = req.body;
 
     const agent = await updateAgent(id, userId, {
       name,
@@ -1433,6 +1454,7 @@ router.patch('/:id', async (req: AuthenticatedRequest, res: Response) => {
       avatar,
       tags,
       status,
+      caveId,
     } as any);
 
     if (!agent) {

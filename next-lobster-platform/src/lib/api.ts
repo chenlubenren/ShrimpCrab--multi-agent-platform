@@ -1,4 +1,4 @@
-import { Lobster, Architecture, Message, Conversation, WorkflowDsl, WorkflowExecution, SessionMessage, WhiteboardNote, Project, ProjectInput, ProjectFileContent, ProjectFileTree, RuntimeHealth } from '@/types';
+import { Lobster, Architecture, Message, Conversation, Deliverable, WorkflowDsl, WorkflowExecution, SessionMessage, WhiteboardNote, Project, ProjectInput, ProjectFileContent, ProjectFileTree, RuntimeHealth } from '@/types';
 import { API_BASE } from '@/lib/runtime';
 
 export type FeishuIntegrationScope = 'agent' | 'team';
@@ -240,7 +240,7 @@ export async function createAgent(data: Partial<Lobster>): Promise<Lobster> {
   return res.json();
 }
 
-export async function adoptOfficialLobster(name: string): Promise<Lobster> {
+export async function adoptOfficialLobster(name: string, platform: string = 'openclaw'): Promise<Lobster> {
   const headers = {
     ...getAuthHeaders(),
     'Content-Type': 'application/json',
@@ -248,13 +248,40 @@ export async function adoptOfficialLobster(name: string): Promise<Lobster> {
   const res = await fetch(`${API_BASE}/api/agents/official-lobster/adopt`, {
     method: 'POST',
     headers,
-    body: JSON.stringify({ name }),
+    body: JSON.stringify({ name, platform }),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     throw new Error(data.message || '领取官方龙虾失败');
   }
   return data.agent;
+}
+
+// ==================== Team Templates API ====================
+export async function fetchTeamTemplates(): Promise<any[]> {
+  const res = await fetch(`${API_BASE}/api/market/team-templates`);
+  const data = await res.json().catch(() => ({}));
+  return data.templates || [];
+}
+
+export async function adoptTeamTemplate(
+  templateId: string,
+  teamName?: string
+): Promise<{ success: boolean; caveId?: string; caveName?: string; teamId?: string; agentIds?: string[]; message?: string }> {
+  const headers = {
+    ...getAuthHeaders(),
+    'Content-Type': 'application/json',
+  };
+  const res = await fetch(`${API_BASE}/api/market/team-templates/${templateId}/adopt`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ teamName }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.message || '领养团队失败');
+  }
+  return data;
 }
 
 export async function updateAgent(agentId: string, updates: Partial<Lobster>): Promise<Lobster> {
@@ -790,6 +817,41 @@ export async function fetchWorkflowExecution(executionId: string): Promise<Workf
     throw new Error(payload.message || '获取 Workflow 执行状态失败');
   }
   return payload.execution;
+}
+
+export async function fetchProjectExecutions(projectId: string): Promise<WorkflowExecution[]> {
+  const res = await fetch(`${API_BASE}/api/workflows/executions?projectId=${encodeURIComponent(projectId)}`, {
+    headers: getAuthHeaders(),
+  });
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) return [];
+  return payload.executions || [];
+}
+
+export async function fetchProjectDeliverables(projectId: string): Promise<Deliverable[]> {
+  const res = await fetch(`${API_BASE}/api/projects/${projectId}/deliverables`, {
+    headers: getAuthHeaders(),
+  });
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) return [];
+  return payload.deliverables || [];
+}
+
+export async function reviewProjectDeliverable(
+  projectId: string,
+  deliverableId: string,
+  status: 'accepted' | 'revision'
+): Promise<Deliverable> {
+  const res = await fetch(`${API_BASE}/api/projects/${projectId}/deliverables/${deliverableId}`, {
+    method: 'PATCH',
+    headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status }),
+  });
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(payload.message || '更新交付物状态失败');
+  }
+  return payload.deliverable;
 }
 
 export async function cancelWorkflowExecution(executionId: string): Promise<WorkflowExecution> {

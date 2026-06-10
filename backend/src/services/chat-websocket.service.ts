@@ -26,6 +26,7 @@ import {
   type CozeChatHistoryMessage,
 } from './coze-market.service.js';
 import { buildAgentRuntimePrompt } from './agent-runtime-context.service.js';
+import { workflowExecutor, type WorkflowEventDelta } from './workflow-executor.service.js';
 
 interface AuthenticatedWebSocket extends WebSocket {
   userId?: string;
@@ -33,6 +34,8 @@ interface AuthenticatedWebSocket extends WebSocket {
   agentId?: string;
   conversationId?: string;
   isAlive?: boolean;
+  channel?: 'chat' | 'workflow';
+  projectId?: string;
 }
 
 interface ChatMessage {
@@ -137,6 +140,18 @@ class ChatWebSocketServer {
 
     // Set up agent runner event listeners
     this.setupAgentEvents();
+    this.setupWorkflowEvents();
+  }
+
+  private setupWorkflowEvents(): void {
+    workflowExecutor.on('workflowEvent', (delta: WorkflowEventDelta) => {
+      this.clients.forEach((ws) => {
+        if (ws.channel !== 'workflow') return;
+        if (ws.userId !== delta.userId) return;
+        if (ws.projectId && delta.projectId && ws.projectId !== delta.projectId) return;
+        this.sendToClient(ws, { type: 'workflow_event', payload: delta });
+      });
+    });
   }
 
   private async handleConnection(ws: AuthenticatedWebSocket, req: IncomingMessage): Promise<void> {
@@ -165,6 +180,48 @@ class ChatWebSocketServer {
     }
 
     ws.userId = decoded.userId;
+
+    const channel = url.searchParams.get('channel');
+    if (channel === 'workflow') {
+      ws.channel = 'workflow';
+      ws.projectId = url.searchParams.get('projectId') || undefined;
+
+      const clientKey = `wf:${decoded.userId}:${Date.now()}:${Math.random().toString(16).slice(2)}`;
+      this.clients.set(clientKey, ws);
+      console.log(`Workflow channel client connected: ${clientKey}`);
+
+      this.sendToClient(ws, {
+        type: 'connected',
+        payload: {
+          channel: 'workflow',
+          projectId: ws.projectId || null,
+          status: 'ready',
+        },
+      });
+
+      ws.on('message', (data) => {
+        try {
+          const msg = JSON.parse(data.toString());
+          if (msg?.type === 'ping') {
+            this.sendToClient(ws, { type: 'pong' });
+          }
+        } catch {
+          // Ignore malformed workflow-channel messages.
+        }
+      });
+
+      ws.on('close', () => {
+        console.log(`Workflow channel client disconnected: ${clientKey}`);
+        this.clients.delete(clientKey);
+      });
+
+      ws.on('error', (error) => {
+        console.error(`WebSocket error for ${clientKey}:`, error);
+      });
+      return;
+    }
+
+    ws.channel = 'chat';
 
     if (!agentId) {
       ws.close(4003, 'Missing agent ID');

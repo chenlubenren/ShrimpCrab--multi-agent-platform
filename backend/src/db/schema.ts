@@ -303,6 +303,24 @@ export const providers = sqliteTable('providers', {
 export type Provider = typeof providers.$inferSelect;
 export type NewProvider = typeof providers.$inferInsert;
 
+// ==================== DELIVERABLES (workflow output files with review state) ====================
+export const deliverables = sqliteTable('deliverables', {
+  id: text('id').primaryKey(),
+  userId: text('user_id').notNull().references(() => users.id),
+  projectId: text('project_id').notNull(),
+  executionId: text('execution_id').notNull(),
+  nodeId: text('node_id'),
+  agentName: text('agent_name'),
+  filePath: text('file_path').notNull(),
+  kind: text('kind').notNull().default('workspace-file'),
+  status: text('status').notNull().default('pending'),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
+  updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull(),
+});
+
+export type DeliverableRow = typeof deliverables.$inferSelect;
+export type NewDeliverableRow = typeof deliverables.$inferInsert;
+
 // ==================== FEISHU INTEGRATIONS ====================
 export const feishuIntegrations = sqliteTable('feishu_integrations', {
   id: text('id').primaryKey(),

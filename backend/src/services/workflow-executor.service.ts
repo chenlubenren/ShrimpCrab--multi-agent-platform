@@ -9,6 +9,7 @@ import { executeCozeAgentTurn } from './coze-market.service.js';
 import { buildAgentRuntimePrompt } from './agent-runtime-context.service.js';
 import { ensureProjectWorkspace, getProject, touchProject } from './project.service.js';
 import { getTeamRuntimePath, resolveStoredPath } from './workspace.service.js';
+import { registerDeliverable } from './deliverable.service.js';
 import type { UserAgentInstance } from '../db/schema.js';
 
 export type WorkflowNodeType = 'start' | 'agent' | 'condition' | 'end';
@@ -84,6 +85,9 @@ export interface WorkflowNodeRunState {
   outputFilePath?: string;
   artifacts?: WorkflowArtifact[];
   error?: string;
+  /** True when the node "succeeded" only via fallback (CLI unavailable / unbound), not real work. */
+  degraded?: boolean;
+  degradedReason?: string;
   startedAt?: string;
   completedAt?: string;
   runCount: number;
@@ -108,13 +112,15 @@ export interface WorkflowExecutionEvent {
     | 'execution_started'
     | 'execution_completed'
     | 'execution_failed'
+    | 'execution_cancelled'
     | 'node_ready'
     | 'node_started'
     | 'node_completed'
     | 'node_failed'
     | 'node_skipped'
     | 'branch_selected'
-    | 'max_iterations';
+    | 'max_iterations'
+    | 'deliverable_created';
   nodeId?: string;
   agentName?: string;
   message: string;
@@ -156,6 +162,40 @@ export interface StartWorkflowExecutionInput {
   task: string;
   dryRun?: boolean;
 }
+
+/** Summary of a node's run state, kept small for WS broadcast. */
+export interface WorkflowNodeStateSummary {
+  nodeId: string;
+  type: WorkflowNodeType;
+  label: string;
+  status: WorkflowNodeExecutionStatus;
+  agentInstanceId?: string;
+  agentName?: string;
+  kind?: WorkflowAgentKind;
+  task?: string;
+  startedAt?: string;
+  completedAt?: string;
+  runCount: number;
+  error?: string;
+  degraded?: boolean;
+}
+
+/** Lightweight delta pushed over WebSocket on every execution event. */
+export interface WorkflowEventDelta {
+  executionId: string;
+  userId: string;
+  projectId?: string;
+  architectureId?: string;
+  workflowName: string;
+  status: WorkflowExecutionStatus;
+  currentNodeIds: string[];
+  event: WorkflowExecutionEvent;
+  nodeStates: WorkflowNodeStateSummary[];
+  finalOutput?: string;
+  error?: string;
+}
+
+const EVENT_OUTPUT_PREVIEW_MAX_CHARS = 2000;
 
 interface RuntimeState {
   execution: WorkflowExecution;
@@ -306,7 +346,10 @@ class WorkflowExecutorService extends EventEmitter {
     if (execution.status === 'running' || execution.status === 'queued') {
       execution.status = 'cancelled';
       execution.updatedAt = new Date().toISOString();
-      this.emit('executionUpdated', cloneExecution(execution));
+      this.addEvent(execution, {
+        type: 'execution_cancelled',
+        message: 'Workflow cancelled by user.',
+      });
     }
     return cloneExecution(execution);
   }
@@ -387,6 +430,7 @@ class WorkflowExecutorService extends EventEmitter {
       message: 'Workflow completed.',
       details: { finalOutput: execution.finalOutput },
     });
+    this.persistExecutionToDisk(execution);
   }
 
   private startReadyNodes(runtime: RuntimeState): void {
@@ -568,6 +612,9 @@ class WorkflowExecutorService extends EventEmitter {
         'All workflow agents in this run share the shared project workspace. Read upstream files from that workspace and write handoff files there when the next node should use them.',
         'When producing a durable deliverable, save it as a real file in the shared workspace or the artifacts directory, then mention the exact path in your result.',
         'This is a single node execution. Do not execute downstream nodes yourself.',
+        'You are running fully non-interactively inside an automated pipeline. The user is NOT present and CANNOT answer any question. Never ask for confirmation, never wait for input, and never offer optional interactive features (for example a browser/visual companion, a local preview URL, mockups-on-request, or "want to try it?" prompts). Just do the work.',
+        'Do not reply with a plan-to-do, an offer, or a description of what you could do. Actually perform this node\'s task now and write the concrete output files into the shared workspace before finishing.',
+        'For a coding task, create the actual source/code/asset files required (e.g. index.html, game.js, styles.css for a web game), not placeholder notes. The node is only complete when the real deliverable files exist in the workspace.',
       ],
     });
     if (platform === 'coze') {
@@ -592,16 +639,13 @@ class WorkflowExecutorService extends EventEmitter {
       if (!shouldFallbackOnCliError(message)) {
         throw error;
       }
-      this.addEvent(runtime.execution, {
-        type: 'node_completed',
-        nodeId: node.id,
-        agentName: agent.name,
-        message: `${agent.name} 的 CLI 不可用，已降级为模拟执行。`,
-        details: { platform, error: message },
-      });
+      // Mark the node as degraded so the UI shows a warning instead of a success.
+      const fallbackState = runtime.execution.nodeStates[node.id];
+      fallbackState.degraded = true;
+      fallbackState.degradedReason = describeFallbackReason(message);
       await sleep(Number(process.env.WORKFLOW_DRY_RUN_NODE_DELAY_MS || 120));
-      const fallbackTask = runtime.execution.nodeStates[node.id].task || task;
-      const handoffPath = this.writeFallbackHandoff(
+      const fallbackTask = fallbackState.task || task;
+      this.writeFallbackHandoff(
         runtime,
         node,
         fallbackTask,
@@ -609,11 +653,9 @@ class WorkflowExecutorService extends EventEmitter {
         [`Platform: ${platform}`, `Reason: ${message}`]
       );
       return [
-        `[${agent.name}] CLI unavailable fallback completed.`,
-        `Platform: ${platform}`,
-        `Reason: ${message}`,
-        `Task: ${fallbackTask}`,
-        `Handoff file: ${handoffPath}`,
+        `[降级] ${agent.name} 未能真正执行：${fallbackState.degradedReason}`,
+        `平台：${platform}`,
+        `原始错误：${message}`,
       ].join('\n');
     }
   }
@@ -625,16 +667,11 @@ class WorkflowExecutorService extends EventEmitter {
   ): Promise<string> {
     const state = runtime.execution.nodeStates[node.id];
     state.agentName = node.label;
-    this.addEvent(runtime.execution, {
-      type: 'node_completed',
-      nodeId: node.id,
-      agentName: node.label,
-      message: `${node.label} 未绑定可执行 Agent，已按模拟节点执行。`,
-      details: { reason },
-    });
+    state.degraded = true;
+    state.degradedReason = '该节点未绑定可执行 Agent';
     await sleep(Number(process.env.WORKFLOW_DRY_RUN_NODE_DELAY_MS || 120));
     const fallbackTask = state.task || runtime.execution.task;
-    const handoffPath = this.writeFallbackHandoff(
+    this.writeFallbackHandoff(
       runtime,
       node,
       fallbackTask,
@@ -642,11 +679,9 @@ class WorkflowExecutorService extends EventEmitter {
       [`Reason: ${reason}`]
     );
     return [
-      `[${node.label}] unbound-agent fallback completed.`,
-      `Role: ${node.role || node.label}`,
-      `Reason: ${reason}`,
-      `Task: ${fallbackTask}`,
-      `Handoff file: ${handoffPath}`,
+      `[降级] ${node.label} 未绑定可执行 Agent，未真正执行。`,
+      `角色：${node.role || node.label}`,
+      `原因：${reason}`,
     ].join('\n');
   }
 
@@ -736,13 +771,58 @@ class WorkflowExecutorService extends EventEmitter {
       type: 'node_completed',
       nodeId: node.id,
       agentName: state.agentName ?? node.label,
-      message: `${node.label} completed.`,
+      message: state.degraded
+        ? `${node.label} 降级完成（未真正执行）。`
+        : `${node.label} completed.`,
       details: {
         output,
         outputFilePath: state.outputFilePath,
         artifacts,
+        degraded: state.degraded ?? false,
+        degradedReason: state.degradedReason,
       },
     });
+    if (!state.degraded) {
+      this.registerNodeDeliverables(runtime, node, artifacts);
+    }
+  }
+
+  /** Register workspace-file artifacts of a completed node as reviewable deliverables. */
+  private registerNodeDeliverables(
+    runtime: RuntimeState,
+    node: WorkflowDslNode,
+    artifacts: WorkflowArtifact[]
+  ): void {
+    const execution = runtime.execution;
+    if (!execution.projectId || node.type !== 'agent') return;
+    const workspaceFiles = artifacts.filter(
+      (artifact) =>
+        artifact.kind === 'workspace-file' && !isNoiseDeliverableFile(artifact.relativePath)
+    );
+    if (workspaceFiles.length === 0) return;
+
+    const state = execution.nodeStates[node.id];
+    for (const artifact of workspaceFiles) {
+      try {
+        const deliverable = registerDeliverable({
+          userId: execution.userId,
+          projectId: execution.projectId,
+          executionId: execution.id,
+          nodeId: node.id,
+          agentName: state?.agentName ?? node.label,
+          filePath: artifact.relativePath,
+        });
+        this.addEvent(execution, {
+          type: 'deliverable_created',
+          nodeId: node.id,
+          agentName: state?.agentName ?? node.label,
+          message: `${node.label} 登记交付物：${artifact.relativePath}`,
+          details: { deliverable },
+        });
+      } catch (err) {
+        console.error('Failed to register deliverable:', err);
+      }
+    }
   }
 
   private markNodeFailed(runtime: RuntimeState, node: WorkflowDslNode, error: string): void {
@@ -777,6 +857,7 @@ class WorkflowExecutorService extends EventEmitter {
       type: 'execution_failed',
       message: error,
     });
+    this.persistExecutionToDisk(execution);
   }
 
   private activateOutgoingEdges(
@@ -1066,13 +1147,134 @@ class WorkflowExecutorService extends EventEmitter {
     execution: WorkflowExecution,
     event: Omit<WorkflowExecutionEvent, 'id' | 'timestamp'>
   ): void {
-    execution.events.push({
+    const fullEvent: WorkflowExecutionEvent = {
       id: `evt_${execution.events.length + 1}_${Date.now()}`,
       timestamp: new Date().toISOString(),
       ...event,
-    });
+    };
+    execution.events.push(fullEvent);
     execution.updatedAt = new Date().toISOString();
     this.emit('executionUpdated', cloneExecution(execution));
+    this.emit('workflowEvent', this.buildWorkflowEventDelta(execution, fullEvent));
+  }
+
+  private buildWorkflowEventDelta(
+    execution: WorkflowExecution,
+    event: WorkflowExecutionEvent
+  ): WorkflowEventDelta {
+    // Trim potentially huge output payloads for the WS channel
+    let slimEvent = event;
+    if (event.details && typeof event.details.output === 'string') {
+      const output = event.details.output as string;
+      slimEvent = {
+        ...event,
+        details: {
+          ...event.details,
+          output: output.length > EVENT_OUTPUT_PREVIEW_MAX_CHARS
+            ? `${output.slice(0, EVENT_OUTPUT_PREVIEW_MAX_CHARS)}\n…(truncated)`
+            : output,
+        },
+      };
+    }
+    return {
+      executionId: execution.id,
+      userId: execution.userId,
+      projectId: execution.projectId,
+      architectureId: execution.architectureId,
+      workflowName: execution.workflowName,
+      status: execution.status,
+      currentNodeIds: [...execution.currentNodeIds],
+      event: slimEvent,
+      nodeStates: Object.values(execution.nodeStates).map((state) => ({
+        nodeId: state.nodeId,
+        type: state.type,
+        label: state.label,
+        status: state.status,
+        agentInstanceId: state.agentInstanceId,
+        agentName: state.agentName,
+        kind: state.kind,
+        task: state.task,
+        startedAt: state.startedAt,
+        completedAt: state.completedAt,
+        runCount: state.runCount,
+        error: state.error,
+        degraded: state.degraded,
+      })),
+      finalOutput: execution.finalOutput,
+      error: execution.error,
+    };
+  }
+
+  private persistExecutionToDisk(execution: WorkflowExecution): void {
+    try {
+      const logDir = path.join(execution.runWorkspacePath, '..');
+      fs.mkdirSync(logDir, { recursive: true });
+      const logFile = path.join(logDir, `${execution.id}.json`);
+      const data: Record<string, unknown> = {
+        id: execution.id,
+        architectureId: execution.architectureId,
+        projectId: execution.projectId,
+        projectName: execution.projectName,
+        workflowName: execution.workflowName,
+        task: execution.task,
+        status: execution.status,
+        dryRun: execution.dryRun,
+        createdAt: execution.createdAt,
+        startedAt: execution.startedAt,
+        completedAt: execution.completedAt,
+        nodeStates: execution.nodeStates,
+        events: execution.events,
+        artifacts: execution.artifacts,
+        finalOutput: execution.finalOutput,
+        error: execution.error,
+      };
+      fs.writeFileSync(logFile, JSON.stringify(data, null, 2), 'utf-8');
+    } catch (err) {
+      console.error('Failed to persist execution to disk:', err);
+    }
+  }
+
+  loadProjectExecutions(userId: string, projectId: string): WorkflowExecution[] {
+    try {
+      const inMemory = Array.from(this.executions.values())
+        .filter((ex) => ex.userId === userId && ex.projectId === projectId)
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+        .map(cloneExecution);
+
+      const byId = new Map(inMemory.map((execution) => [execution.id, execution]));
+      const workspaceRoot = resolveStoredPath(
+        process.env.WORKSPACE_ROOT || path.join(process.cwd(), 'data', 'workspaces')
+      );
+      const runsDir = path.join(
+        workspaceRoot,
+        'users',
+        userId,
+        'projects',
+        projectId,
+        'workspace',
+        '.openclaw',
+        'workflow-runs'
+      );
+
+      if (fs.existsSync(runsDir)) {
+        for (const file of fs.readdirSync(runsDir)) {
+          if (!file.endsWith('.json')) continue;
+          try {
+            const content = fs.readFileSync(path.join(runsDir, file), 'utf-8');
+            const data = JSON.parse(content) as WorkflowExecution;
+            if (data.userId === userId && data.projectId === projectId && data.id && !byId.has(data.id)) {
+              byId.set(data.id, data);
+            }
+          } catch {
+            // Skip corrupted or partially-written execution logs.
+          }
+        }
+      }
+
+      return Array.from(byId.values()).sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+    } catch {
+      return [];
+    }
   }
 }
 
@@ -1238,6 +1440,39 @@ function cloneExecution(execution: WorkflowExecution): WorkflowExecution {
 function shouldFallbackOnCliError(message: string): boolean {
   if (process.env.WORKFLOW_DISABLE_CLI_FALLBACK === '1') return false;
   return /ENOENT|not installed|not in PATH|command not found|not recognized|not logged in|please run \/login|authentication|unauthorized|api key|missing credentials|timed out/i.test(message);
+}
+
+/** Translate a raw CLI error into a short human-readable degradation reason. */
+function describeFallbackReason(message: string): string {
+  if (/ProviderAuthError|authentication|unauthorized|api key|missing credentials|not logged in|please run \/login/i.test(message)) {
+    return '未配置可用的 LLM API Key（鉴权失败）';
+  }
+  if (/ENOENT|not installed|not in PATH|command not found|not recognized/i.test(message)) {
+    return 'Agent CLI 未安装或不可用';
+  }
+  if (/timed out/i.test(message)) {
+    return 'Agent CLI 执行超时';
+  }
+  return 'Agent CLI 不可用';
+}
+
+/** OpenClaw runtime scaffold files; never user-facing deliverables. */
+const SCAFFOLD_DELIVERABLE_FILES = new Set([
+  'AGENTS.md',
+  'BOOTSTRAP.md',
+  'HEARTBEAT.md',
+  'IDENTITY.md',
+  'SOUL.md',
+  'TOOLS.md',
+  'USER.md',
+]);
+
+/** Files that are intermediate/scaffolding and should not be surfaced as deliverables. */
+function isNoiseDeliverableFile(relativePath: string): boolean {
+  const normalized = normalizeRelativePath(relativePath);
+  if (normalized.startsWith('handoff/')) return true;
+  const base = normalized.split('/').pop() || normalized;
+  return SCAFFOLD_DELIVERABLE_FILES.has(base);
 }
 
 function truncate(value: string, maxLength: number): string {

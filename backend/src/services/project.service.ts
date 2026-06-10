@@ -315,9 +315,20 @@ function resolveStoredProjectPath(workspacePath: string): string {
   return resolveStoredPath(workspacePath);
 }
 
+const OPENCLAW_SCAFFOLD_FILES = new Set([
+  'AGENTS.md',
+  'BOOTSTRAP.md',
+  'HEARTBEAT.md',
+  'IDENTITY.md',
+  'SOUL.md',
+  'TOOLS.md',
+  'USER.md',
+]);
+
 function shouldHideProjectTreeEntry(name: string, relativePath: string, isDirectory: boolean): boolean {
   if (isDirectory && PROJECT_FILE_IGNORED_DIRS.has(name)) return true;
   if (relativePath === '.openclaw-project.json') return true;
+  if (!isDirectory && relativePath === name && OPENCLAW_SCAFFOLD_FILES.has(name)) return true;
   return false;
 }
 

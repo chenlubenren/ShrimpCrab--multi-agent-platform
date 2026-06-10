@@ -63,6 +63,40 @@ function ensureColumns() {
   if (projectCols.length > 0 && !projectCols.includes('agent_ids')) {
     sqliteDb.exec(`ALTER TABLE projects ADD COLUMN agent_ids TEXT NOT NULL DEFAULT '[]'`);
   }
+
+  const feishuCols = sqliteDb
+    .prepare(`PRAGMA table_info(feishu_integrations)`)
+    .all()
+    .map((r: any) => r.name);
+
+  if (feishuCols.length > 0) {
+    const addFeishuColumn = (name: string, definition: string) => {
+      if (!feishuCols.includes(name)) {
+        sqliteDb!.exec(`ALTER TABLE feishu_integrations ADD COLUMN ${name} ${definition}`);
+        feishuCols.push(name);
+      }
+    };
+
+    addFeishuColumn('scope', `TEXT NOT NULL DEFAULT 'agent'`);
+    addFeishuColumn('subject_id', `TEXT NOT NULL DEFAULT ''`);
+    addFeishuColumn('app_id', `TEXT NOT NULL DEFAULT ''`);
+    addFeishuColumn('app_secret', `TEXT NOT NULL DEFAULT ''`);
+    addFeishuColumn('chat_id', `TEXT`);
+    addFeishuColumn('verification_token', `TEXT`);
+    addFeishuColumn('webhook_secret', `TEXT`);
+
+    if (feishuCols.includes('target_type')) {
+      sqliteDb.exec(`UPDATE feishu_integrations SET scope = target_type WHERE target_type IS NOT NULL AND target_type != ''`);
+    }
+    if (feishuCols.includes('target_id')) {
+      sqliteDb.exec(`UPDATE feishu_integrations SET subject_id = target_id WHERE target_id IS NOT NULL AND target_id != ''`);
+    }
+    if (feishuCols.includes('callback_token')) {
+      sqliteDb.exec(`UPDATE feishu_integrations SET verification_token = callback_token WHERE callback_token IS NOT NULL AND callback_token != ''`);
+    }
+
+    sqliteDb.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_feishu_integrations_scope_subject ON feishu_integrations(scope, subject_id)`);
+  }
 }
 
 function ensureAgentRuntimeDirectoryRows() {
@@ -396,6 +430,26 @@ export function getDb() {
 
       CREATE INDEX IF NOT EXISTS idx_providers_user ON providers(user_id);
 
+      -- Deliverables (workflow output files with review state)
+      CREATE TABLE IF NOT EXISTS deliverables (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        project_id TEXT NOT NULL,
+        execution_id TEXT NOT NULL,
+        node_id TEXT,
+        agent_name TEXT,
+        file_path TEXT NOT NULL,
+        kind TEXT NOT NULL DEFAULT 'workspace-file',
+        status TEXT NOT NULL DEFAULT 'pending',
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        FOREIGN KEY (user_id) REFERENCES users(id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_deliverables_user_project ON deliverables(user_id, project_id);
+      CREATE INDEX IF NOT EXISTS idx_deliverables_execution ON deliverables(execution_id);
+      CREATE INDEX IF NOT EXISTS idx_deliverables_status ON deliverables(status);
+
       -- Feishu Integrations
       CREATE TABLE IF NOT EXISTS feishu_integrations (
         id TEXT PRIMARY KEY,
@@ -414,7 +468,6 @@ export function getDb() {
       );
 
       CREATE INDEX IF NOT EXISTS idx_feishu_integrations_user ON feishu_integrations(user_id);
-      CREATE UNIQUE INDEX IF NOT EXISTS idx_feishu_integrations_scope_subject ON feishu_integrations(scope, subject_id);
     `);
 
     // Ensure additive schema migrations for existing DBs

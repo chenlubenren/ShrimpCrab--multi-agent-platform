@@ -35,7 +35,7 @@ export const OFFICIAL_AGENT_MARKET_ID = 'official-agent';
 export const OFFICIAL_AGENT_NAME = '官方agent';
 export const OFFICIAL_AGENT_VERSION = '1.0.0';
 export const OFFICIAL_AGENT_AVATAR = '/claw_profile/03.png';
-export const OFFICIAL_AGENT_DESCRIPTION = '从官方 OpenClaw workspace 领养得到的固定官方 Agent。';
+export const OFFICIAL_AGENT_DESCRIPTION = 'Official OpenClaw workspace agent template.';
 const OFFICIAL_AGENT_DEFAULT_SOURCE_WORKSPACE = path.join(os.homedir(), '.openclaw', 'workspace');
 const LEGACY_OFFICIAL_LOBSTER_NAME = '官方龙虾';
 const OFFICIAL_AGENT_SYSTEM_USER_ID = 'official-system';
@@ -47,6 +47,25 @@ const OFFICIAL_AGENT_TAGS = [
   'quick-adopt',
   'openclaw-workspace',
 ];
+
+const ADOPT_SUPPORTED_PLATFORMS = ['openclaw', 'hermes', 'opencode'] as const;
+export type AdoptPlatform = (typeof ADOPT_SUPPORTED_PLATFORMS)[number];
+
+export function isAdoptPlatform(value: string): value is AdoptPlatform {
+  return (ADOPT_SUPPORTED_PLATFORMS as readonly string[]).includes(value);
+}
+
+const PLATFORM_STATE_DIRS: Record<AdoptPlatform, string> = {
+  openclaw: '.openclaw',
+  hermes: '.hermes',
+  opencode: '.opencode',
+};
+
+const PLATFORM_AVATARS: Record<AdoptPlatform, string> = {
+  openclaw: OFFICIAL_AGENT_AVATAR,
+  hermes: '/agent-icons/hermes.svg',
+  opencode: '/agent-icons/opencode.svg',
+};
 const OFFICIAL_AGENT_SKIP_DIR_NAMES = new Set([
   '.claude',
   '.clawhub',
@@ -410,7 +429,8 @@ export async function ensureOfficialAgentMarketEntry(
 
 export async function adoptOfficialAgentToUser(
   userId: string,
-  requestedName: string
+  requestedName: string,
+  platform: AdoptPlatform = 'openclaw'
 ): Promise<{ success: boolean; agentId?: string; error?: string }> {
   const displayName = requestedName.trim();
   if (!displayName) {
@@ -456,8 +476,8 @@ export async function adoptOfficialAgentToUser(
       version: String(manifest.version || OFFICIAL_AGENT_VERSION),
       description: OFFICIAL_AGENT_DESCRIPTION,
       entrypoint: {
-        type: 'openclaw',
         ...((manifest.entrypoint && typeof manifest.entrypoint === 'object') ? manifest.entrypoint as Record<string, unknown> : {}),
+        type: platform,
       },
       metadata: {
         ...((manifest.metadata && typeof manifest.metadata === 'object') ? manifest.metadata as Record<string, unknown> : {}),
@@ -475,8 +495,8 @@ export async function adoptOfficialAgentToUser(
           agentId,
           name: displayName,
           description: OFFICIAL_AGENT_DESCRIPTION,
-          avatar: OFFICIAL_AGENT_AVATAR,
-          platform: 'openclaw',
+          avatar: PLATFORM_AVATARS[platform],
+          platform,
           providerId: null,
           updatedAt: new Date(now).toISOString(),
         },
@@ -487,7 +507,7 @@ export async function adoptOfficialAgentToUser(
     );
 
     cloneDirectory(workspacePath, baselinePath);
-    const runtimeDirs = ensureAgentRuntimeDirs(workspacePath);
+    const runtimeDirs = ensureAgentRuntimeDirs(workspacePath, path.join(workspacePath, PLATFORM_STATE_DIRS[platform]));
 
     db.prepare(`
       INSERT INTO user_agent_instances (
@@ -503,14 +523,14 @@ export async function adoptOfficialAgentToUser(
       OFFICIAL_AGENT_VERSION,
       displayName,
       OFFICIAL_AGENT_DESCRIPTION,
-      OFFICIAL_AGENT_AVATAR,
+      PLATFORM_AVATARS[platform],
       generateAgentKey(),
       workspacePath,
       runtimeDirs.stateDir,
       baselinePath,
       'idle',
       JSON.stringify(manifest),
-      JSON.stringify(OFFICIAL_AGENT_TAGS),
+      JSON.stringify([...OFFICIAL_AGENT_TAGS, `platform:${platform}`]),
       null,
       null,
       0,
