@@ -63,32 +63,35 @@ export function Header({
   const headerContentStyle = traditionalMode && traditionalSidebarOpen
     ? { paddingLeft: traditionalSidebarWidth }
     : undefined;
+  const showHeaderBrand = !traditionalMode || !traditionalSidebarOpen;
 
   return (
     <header className={`border-b-4 border-pixel-white bg-pixel-black px-4 py-3 ${traditionalMode ? 'md:px-0' : ''}`}>
       <div
-        className={`${traditionalMode ? 'mx-0 flex w-full max-w-none items-center justify-between gap-6 px-6 transition-[padding] duration-300 ease-out xl:px-8' : 'max-w-7xl mx-auto flex items-center justify-between'}`}
+        className={`${traditionalMode ? `mx-0 flex w-full max-w-none items-center ${showHeaderBrand ? 'justify-between' : 'justify-end'} gap-6 px-6 transition-[padding] duration-300 ease-out xl:px-8` : 'max-w-7xl mx-auto flex items-center justify-between'}`}
         style={headerContentStyle}
       >
-        <div className={`flex min-w-0 items-center gap-4 ${traditionalMode ? 'ml-[3px]' : ''}`}>
-          <Link href="/" className={`flex min-w-0 items-center gap-4 no-underline ${traditionalMode ? 'pr-4' : ''}`}>
-            <div className="flex h-12 w-12 shrink-0 items-center justify-center border-4 border-pixel-white bg-pixel-red">
-              <svg viewBox="0 0 24 24" className="w-7 h-7 text-pixel-white">
-                <path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
-              </svg>
-            </div>
-            <h1 className={`flex min-w-0 items-center ${traditionalMode ? 'gap-4' : 'gap-3'}`}>
-              <span className="chinese-large whitespace-nowrap text-pixel-white">虾兵蟹将</span>
-              <span className={`font-pixel text-pixel-white/70 ${traditionalMode ? 'hidden text-xl lg:inline' : 'text-xl'}`}>AGENT TEAM PLATFORM</span>
-            </h1>
-          </Link>
-          {traditionalMode && (
-            <div className="hidden min-w-0 border-l-2 border-pixel-white/20 pl-5 font-pixel text-sm leading-tight text-pixel-white/55 xl:block">
-              <span className="block">TRADITIONAL WORKSPACE</span>
-              <span className="block text-pixel-yellow">WIDE DISPLAY READY</span>
-            </div>
-          )}
-        </div>
+        {showHeaderBrand && (
+          <div className={`flex min-w-0 items-center gap-4 ${traditionalMode ? 'ml-[3px]' : ''}`}>
+            <Link href="/" className={`flex min-w-0 items-center gap-4 no-underline ${traditionalMode ? 'pr-4' : ''}`}>
+              <div className="flex h-12 w-12 shrink-0 items-center justify-center border-4 border-pixel-white bg-pixel-red">
+                <svg viewBox="0 0 24 24" className="w-7 h-7 text-pixel-white">
+                  <path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
+                </svg>
+              </div>
+              <h1 className={`flex min-w-0 items-center ${traditionalMode ? 'gap-4' : 'gap-3'}`}>
+                <span className="chinese-large whitespace-nowrap text-pixel-white">虾兵蟹将</span>
+                <span className={`font-pixel text-pixel-white/70 ${traditionalMode ? 'hidden text-xl lg:inline' : 'text-xl'}`}>AGENT TEAM PLATFORM</span>
+              </h1>
+            </Link>
+            {traditionalMode && (
+              <div className="hidden min-w-0 border-l-2 border-pixel-white/20 pl-5 font-pixel text-sm leading-tight text-pixel-white/55 xl:block">
+                <span className="block">TRADITIONAL WORKSPACE</span>
+                <span className="block text-pixel-yellow">WIDE DISPLAY READY</span>
+              </div>
+            )}
+          </div>
+        )}
 
         <div className={`flex shrink-0 items-center ${traditionalMode ? 'gap-3' : 'gap-4'}`}>
           <DesktopDisplayModeToggle />

@@ -95,12 +95,12 @@ function TraditionalDesktopSidebar({
 }) {
   const navItems: Array<{ href: string; label: string; icon: SidebarIcon; tone: string; exact?: boolean }> = [
     { href: '/', label: '首页', icon: 'home', tone: 'bg-pixel-green', exact: true },
-    { href: '/my-den', label: '我的 Agent', icon: 'agents', tone: 'bg-pixel-red' },
-    { href: '/architectures/mine', label: '团队管理', icon: 'teams', tone: 'bg-pixel-blue' },
-    { href: '/projects', label: '项目空间', icon: 'projects', tone: 'bg-pixel-yellow' },
-    { href: '/agent-tea-party', label: '茶话会', icon: 'tea', tone: 'bg-pixel-red' },
+    { href: '/my-den', label: '我的 Agent 窝', icon: 'agents', tone: 'bg-pixel-red' },
+    { href: '/architectures/mine', label: '我的团队', icon: 'teams', tone: 'bg-pixel-blue' },
+    { href: '/projects', label: '我的项目', icon: 'projects', tone: 'bg-pixel-yellow' },
+    { href: '/agent-tea-party', label: 'Agent 茶话会', icon: 'tea', tone: 'bg-pixel-red' },
     { href: '/market', label: 'Agent 世界', icon: 'market', tone: 'bg-pixel-yellow' },
-    { href: '/settings/providers', label: '设置', icon: 'settings', tone: 'bg-pixel-gray' },
+    { href: '/settings/providers', label: '供应商设置', icon: 'settings', tone: 'bg-pixel-gray' },
   ];
 
   const handleResizePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
