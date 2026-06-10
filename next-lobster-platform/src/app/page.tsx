@@ -44,6 +44,25 @@ function projectSubtitle(project: Project) {
   return `${teams} · ${branch}`;
 }
 
+function isToday(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return false;
+  const now = new Date();
+  return date.getFullYear() === now.getFullYear()
+    && date.getMonth() === now.getMonth()
+    && date.getDate() === now.getDate();
+}
+
+function estimateTokenUsage(messages: SessionMessage[]) {
+  return messages
+    .filter((message) => isToday(message.timestamp))
+    .reduce((total, message) => total + Math.max(1, Math.ceil((message.content || '').length / 1.8)), 0);
+}
+
+function formatMetricValue(value: number) {
+  return value.toLocaleString('zh-CN');
+}
+
 function MobilePanel({ children, className = '' }: { children: React.ReactNode; className?: string }) {
   return (
     <section
@@ -143,7 +162,7 @@ function MobileAgentRow({ agent, displayMode }: { agent: Lobster; displayMode: M
         <img
           src={agent.avatar || '/lobsters/lobster-004.png'}
           alt={agent.name}
-          className={`h-full w-full object-contain ${hasProvider ? '' : 'grayscale opacity-45'}`}
+          className={`h-full w-full object-contain ${hasProvider ? 'animate-online-agent-profile' : 'grayscale opacity-45'}`}
           style={{ imageRendering: 'pixelated' }}
         />
         <span
@@ -506,7 +525,9 @@ function MobileHome({
   isLoggedIn: boolean;
 }) {
   const searchParams = useSearchParams();
+  const router = useRouter();
   const [displayMode, setMobileDisplayMode] = useMobileDisplayMode();
+  const { user, logout } = useAuthStore();
   const careMode = displayMode === 'care';
   const requestedTab = searchParams.get('mobileTab');
   const activeTab: MobileTabKey = isMobileTabKey(requestedTab) ? requestedTab : 'projects';
@@ -643,11 +664,45 @@ function MobileHome({
 
           {activeTab === 'me' && (
             <MobilePanel>
-              <div className={`border-b-4 border-pixel-black bg-pixel-gray text-pixel-white ${careMode ? 'px-4 py-3' : 'px-3 py-2'}`}>
+              <div className={`border-b-4 border-pixel-black ${isLoggedIn ? 'bg-pixel-blue' : 'bg-pixel-gray'} text-pixel-white ${careMode ? 'px-4 py-3' : 'px-3 py-2'}`}>
                 <p className={`font-pixel font-bold leading-tight ${careMode ? 'text-[1.8rem]' : 'text-base'}`}>
                   {isLoggedIn ? '已登录' : '未登录'}
                 </p>
-                <p className={`mt-1 font-pixel leading-tight text-pixel-white/80 ${careMode ? 'text-lg' : 'text-xs'}`}>供应商、导入和个人 Agent 管理</p>
+                <p className={`mt-1 font-pixel leading-tight text-pixel-white/80 ${careMode ? 'text-lg' : 'text-xs'}`}>
+                  {isLoggedIn && user?.username ? `${user.username} · 供应商、导入和个人 Agent 管理` : '登录后同步你的 Agent、团队和项目'}
+                </p>
+              </div>
+              <div className={`border-b-2 border-pixel-black/10 bg-pixel-white p-3 ${careMode ? 'space-y-3' : 'space-y-2'}`}>
+                {isLoggedIn ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      logout();
+                      router.replace('/?mobileTab=me');
+                    }}
+                    className={`flex w-full items-center justify-center border-4 border-pixel-black bg-pixel-red font-pixel font-bold leading-none text-pixel-white ${careMode ? 'min-h-[64px] px-4 text-2xl' : 'min-h-[48px] px-3 text-base'}`}
+                    style={{ boxShadow: '3px 3px 0 #101010' }}
+                  >
+                    注销登录
+                  </button>
+                ) : (
+                  <div className="grid grid-cols-2 gap-2">
+                    <Link
+                      href="/auth/login"
+                      className={`flex items-center justify-center border-4 border-pixel-black bg-pixel-blue font-pixel font-bold leading-none text-pixel-white no-underline ${careMode ? 'min-h-[64px] px-4 text-2xl' : 'min-h-[48px] px-3 text-base'}`}
+                      style={{ boxShadow: '3px 3px 0 #101010' }}
+                    >
+                      登录
+                    </Link>
+                    <Link
+                      href="/auth/register"
+                      className={`flex items-center justify-center border-4 border-pixel-black bg-pixel-green font-pixel font-bold leading-none text-pixel-white no-underline ${careMode ? 'min-h-[64px] px-4 text-2xl' : 'min-h-[48px] px-3 text-base'}`}
+                      style={{ boxShadow: '3px 3px 0 #101010' }}
+                    >
+                      注册
+                    </Link>
+                  </div>
+                )}
               </div>
               <MobileDisplayModeSwitch displayMode={displayMode} onChange={setMobileDisplayMode} />
               <MobileLinkRow href="/settings/providers" title="供应商设置" description="配置模型供应商与 API Key" accent="bg-pixel-blue" icon={<MobileNavIcon tab="me" compact={!careMode} />} displayMode={displayMode} />
@@ -708,7 +763,6 @@ type DesktopActionIcon = 'adopt' | 'upload' | 'market' | 'den' | 'team' | 'teams
 interface TraditionalDesktopHomeProps {
   lobsters: Lobster[];
   projects: Project[];
-  sessions: Session[];
   sessionMessages: SessionMessage[];
   teamCount: number;
   isLoggedIn: boolean;
@@ -885,7 +939,7 @@ function TraditionalStatCard({
   tone,
 }: {
   label: string;
-  value: number;
+  value: number | string;
   note: string;
   tone: DesktopActionTone;
 }) {
@@ -998,7 +1052,6 @@ function TraditionalPanel({
 function TraditionalDesktopHome({
   lobsters,
   projects,
-  sessions,
   sessionMessages,
   teamCount,
   isLoggedIn,
@@ -1017,12 +1070,7 @@ function TraditionalDesktopHome({
   });
   const singleAgentActions = actions.slice(0, 4);
   const agentTeamActions = actions.slice(4);
-  const workingAgents = lobsters.filter((lobster) => lobster.status === 'working' || lobster.status === 'busy').length;
-  const todayMessageCount = sessionMessages.filter((message) => {
-    const timestamp = new Date(message.timestamp).getTime();
-    if (Number.isNaN(timestamp)) return false;
-    return Date.now() - timestamp < 24 * 60 * 60 * 1000;
-  }).length;
+  const todayTokenUsage = estimateTokenUsage(sessionMessages);
   const recentProjects = projects.slice(0, 4);
 
   return (
@@ -1043,10 +1091,10 @@ function TraditionalDesktopHome({
           </section>
 
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-            <TraditionalStatCard label="Agent 总数" value={lobsters.length} note={isLoggedIn ? '已同步到工作台' : '登录后同步'} tone="green" />
-            <TraditionalStatCard label="运行中任务" value={workingAgents} note={workingAgents > 0 ? '正在协作中' : '暂无运行中'} tone="blue" />
-            <TraditionalStatCard label="团队方案" value={teamCount} note="可进入团队管理" tone="yellow" />
-            <TraditionalStatCard label="今日协作" value={todayMessageCount || sessions.length} note={todayMessageCount > 0 ? '24 小时内消息' : '茶话会会话'} tone="red" />
+            <TraditionalStatCard label="Agent数量" value={formatMetricValue(lobsters.length)} note={isLoggedIn ? '已同步到工作台' : '登录后同步'} tone="green" />
+            <TraditionalStatCard label="团队数量" value={formatMetricValue(teamCount)} note="可进入团队管理" tone="blue" />
+            <TraditionalStatCard label="项目数量" value={formatMetricValue(projects.length)} note="服务器工作空间" tone="yellow" />
+            <TraditionalStatCard label="今日token消耗" value={formatMetricValue(todayTokenUsage)} note={todayTokenUsage > 0 ? '按今日消息估算' : '暂无今日消息'} tone="red" />
           </div>
 
           <div className="grid gap-5 pt-3 xl:grid-cols-2">
@@ -1065,6 +1113,7 @@ function TraditionalDesktopHome({
                       onDelete={deleteAgentAPI}
                       onConfig={onConfigAgent}
                       onChanged={onChanged}
+                      animateOnlineProfile
                     />
                   ))}
                 </div>
@@ -1178,7 +1227,6 @@ function HomePageInner() {
             key="traditional"
             lobsters={lobsters}
             projects={projects}
-            sessions={sessions}
             sessionMessages={sessionMessages}
             teamCount={teamCount}
             isLoggedIn={isLoggedIn}
@@ -1272,6 +1320,7 @@ function HomePageInner() {
                             onDelete={deleteAgentAPI}
                             onConfig={setConfigAgent}
                             onChanged={initialize}
+                            animateOnlineProfile
                           />
                         ))}
                       </div>

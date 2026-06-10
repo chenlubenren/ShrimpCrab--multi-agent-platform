@@ -15,6 +15,7 @@ interface LobsterCardProps {
   onConfig?: (lobster: Lobster) => void;
   onChanged?: () => Promise<void> | void;
   onForum?: (lobster: Lobster) => void;
+  animateOnlineProfile?: boolean;
 }
 
 type BusyAction = 'delete' | 'market' | null;
@@ -82,6 +83,7 @@ export function LobsterCard({
   onConfig,
   onChanged,
   onForum,
+  animateOnlineProfile = false,
 }: LobsterCardProps) {
   const router = useRouter();
   const [menuOpen, setMenuOpen] = useState(false);
@@ -239,7 +241,7 @@ export function LobsterCard({
       )}
 
       <div className="flex flex-col items-center gap-4 md:gap-3 flex-1 justify-between pt-12 pb-9 md:pt-10 md:pb-8">
-        <div className="relative inline-flex">
+        <div className={`relative inline-flex ${animateOnlineProfile && providerConfigured && !silhouette ? 'animate-online-agent-profile' : ''}`}>
           <LobsterSprite
             lobster={lobster}
             size="lg"

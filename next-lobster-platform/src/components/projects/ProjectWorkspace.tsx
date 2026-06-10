@@ -677,6 +677,7 @@ export function ProjectWorkspace({
 
         <WorkflowTaskBoard
           execution={latestExecution}
+          agents={lobsters}
           deliverables={deliverables}
           onOpenFile={(relativePath) => void openFilePreview(relativePath)}
           onReviewDeliverable={(deliverableId, status) => void reviewDeliverable(deliverableId, status)}
@@ -1087,6 +1088,13 @@ function FilePreviewModal({ preview, projectId, onClose }: { preview: FilePrevie
   );
 }
 
+type BindingTargetItem = {
+  id: string;
+  name: string;
+  description?: string;
+  avatar?: string;
+};
+
 function TeamBindingModal({
   teams,
   agents,
@@ -1112,24 +1120,28 @@ function TeamBindingModal({
 }) {
   return (
     <ModalFrame title="绑定 Agent / 团队" onClose={onClose} maxWidthClass="max-w-3xl">
-      <div className="grid gap-3">
-        <BindingTargetSection
-          title="单 Agent 模式"
-          emptyText="还没有可绑定的单个 Agent。"
-          items={agents}
-          selectedIds={selectedAgentIds}
-          selectedClassName="bg-pixel-blue text-pixel-white"
-          onToggle={onToggleAgent}
-        />
-        <BindingTargetSection
-          title="多 Agent 协作模式"
-          emptyText="还没有可绑定的团队。"
-          items={teams}
-          selectedIds={selectedTeamIds}
-          selectedClassName="bg-pixel-green text-pixel-white"
-          onToggle={onToggleTeam}
-        />
-        <div className="flex flex-col items-stretch justify-between gap-3 border-t-4 border-pixel-black pt-3 md:flex-row md:items-center">
+      <div className="flex max-h-[calc(92vh-92px)] flex-col">
+        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
+          <BindingTargetSection
+            title="单 Agent 模式"
+            emptyText="还没有可绑定的单个 Agent。"
+            items={agents}
+            selectedIds={selectedAgentIds}
+            selectedClassName="bg-pixel-blue text-pixel-white"
+            onToggle={onToggleAgent}
+            defaultCollapsed
+            showAvatars
+          />
+          <BindingTargetSection
+            title="多 Agent 协作模式"
+            emptyText="还没有可绑定的团队。"
+            items={teams}
+            selectedIds={selectedTeamIds}
+            selectedClassName="bg-pixel-green text-pixel-white"
+            onToggle={onToggleTeam}
+          />
+        </div>
+        <div className="sticky bottom-0 z-20 mt-3 flex flex-col items-stretch justify-between gap-3 border-t-4 border-pixel-black bg-pixel-white pt-3 md:flex-row md:items-center">
           <p className="min-h-[24px] font-pixel text-sm text-pixel-black/60">{message}</p>
           <PixelButton onClick={onSave} disabled={saving} className="min-h-[48px] md:min-h-0">
             {saving ? '保存中...' : '保存绑定'}
@@ -1147,54 +1159,83 @@ function BindingTargetSection({
   selectedIds,
   selectedClassName,
   onToggle,
+  defaultCollapsed = false,
+  showAvatars = false,
 }: {
   title: string;
   emptyText: string;
-  items: Array<{ id: string; name: string; description?: string }>;
+  items: BindingTargetItem[];
   selectedIds: string[];
   selectedClassName: string;
   onToggle: (id: string) => void;
+  defaultCollapsed?: boolean;
+  showAvatars?: boolean;
 }) {
+  const [collapsed, setCollapsed] = useState(defaultCollapsed);
+
   return (
-    <div>
-      <div className="mb-2 flex items-center justify-between gap-2">
-        <p className="font-pixel text-sm font-bold text-pixel-black">{title}</p>
+    <div className="border-2 border-pixel-black bg-pixel-white">
+      <button
+        type="button"
+        onClick={() => setCollapsed((value) => !value)}
+        className="flex w-full items-center justify-between gap-2 border-b-2 border-pixel-black bg-pixel-black/5 px-3 py-2 text-left"
+        aria-expanded={!collapsed}
+      >
+        <p className="font-pixel text-sm font-bold text-pixel-black">{collapsed ? '＋' : '－'} {title}</p>
         <span className="border-2 border-pixel-black bg-pixel-white px-2 py-0.5 font-pixel text-[10px] text-pixel-black">
-          {selectedIds.length}
+          已选 {selectedIds.length}
         </span>
-      </div>
-      {items.length > 0 ? (
-        <div className="grid gap-2">
-          {items.map((item) => {
-            const checked = selectedIds.includes(item.id);
-            return (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => onToggle(item.id)}
-                className={`border-2 border-pixel-black p-3 text-left font-pixel text-sm ${
-                  checked ? selectedClassName : 'bg-pixel-white text-pixel-black hover:bg-pixel-yellow/50'
-                }`}
-              >
-                <span className="block truncate">{checked ? '[x]' : '[ ]'} {item.name}</span>
-                {item.description && (
-                  <span className={`mt-1 block truncate text-xs ${checked ? 'text-pixel-white/75' : 'text-pixel-black/55'}`}>
-                    {item.description}
-                  </span>
-                )}
-              </button>
-            );
-          })}
-        </div>
-      ) : (
-        <div className="border-4 border-dashed border-pixel-black p-4 text-center font-pixel text-sm text-pixel-black/60">
-          {emptyText}
+      </button>
+
+      {!collapsed && (
+        <div className="p-3">
+          {items.length > 0 ? (
+            <div className="grid gap-2">
+              {items.map((item) => {
+                const checked = selectedIds.includes(item.id);
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => onToggle(item.id)}
+                    className={`w-full border-2 border-pixel-black p-3 text-left font-pixel text-sm ${
+                      checked ? selectedClassName : 'bg-pixel-white text-pixel-black hover:bg-pixel-yellow/50'
+                    }`}
+                  >
+                    <span className="flex min-w-0 items-center gap-3">
+                      {showAvatars && (
+                        <span className="flex h-11 w-11 shrink-0 items-center justify-center border-2 border-pixel-black bg-pixel-white">
+                          <img
+                            src={item.avatar || '/claw_profile/03.png'}
+                            alt=""
+                            className="h-9 w-9 object-contain"
+                            style={{ imageRendering: 'pixelated' }}
+                          />
+                        </span>
+                      )}
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate font-bold">{checked ? '[x]' : '[ ]'} {item.name}</span>
+                        {item.description && (
+                          <span className={`mt-1 block line-clamp-2 text-xs leading-snug ${checked ? 'text-pixel-white/75' : 'text-pixel-black/55'}`}>
+                            {item.description}
+                          </span>
+                        )}
+                      </span>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="border-4 border-dashed border-pixel-black p-4 text-center font-pixel text-sm text-pixel-black/60">
+              {emptyText}
+            </div>
+          )}
         </div>
       )}
     </div>
   );
 }
-
 function TeamCompositionModal({
   teams,
   selectedTeamId,

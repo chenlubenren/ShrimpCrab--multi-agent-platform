@@ -12,6 +12,7 @@
   --pixel-green: #2D7D46;
   --pixel-yellow: #D4A533;
   --pixel-red: #A83232;
+  --font-main: 'VT323', 'ZCOOL KuaiLe', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 
 * {
@@ -19,7 +20,7 @@
 }
 
 body {
-  font-family: 'VT323', monospace;
+  font-family: var(--font-main);
   font-size: 20px;
   line-height: 1.4;
   background-color: #E8E8E8;
@@ -29,20 +30,35 @@ body {
 
 /* Pixel font base class */
 .font-pixel {
-  font-family: 'VT323', monospace;
-  letter-spacing: 0.5px;
+  font-family: var(--font-main);
+  letter-spacing: 0;
 }
 
 /* Chinese pixel font - larger for readability */
 .font-chinese {
-  font-family: 'ZCOOL KuaiLe', cursive;
+  font-family: var(--font-main);
 }
 
 /* Chinese font larger */
 .chinese-large {
-  font-family: 'ZCOOL KuaiLe', cursive;
+  font-family: var(--font-main);
   font-size: 1.8em;
-  letter-spacing: 2px;
+  letter-spacing: 0;
+  line-height: 1.08;
+}
+
+@keyframes onlineAgentProfileScale {
+  0%, 100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.075);
+  }
+}
+
+.animate-online-agent-profile {
+  animation: onlineAgentProfileScale 2.4s ease-in-out infinite;
+  transform-origin: center;
 }
 
 /* Text sizes - pixel font optimized */
