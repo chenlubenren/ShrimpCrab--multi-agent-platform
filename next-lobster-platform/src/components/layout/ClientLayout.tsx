@@ -370,7 +370,7 @@ export function ClientLayout({ children }: ClientLayoutProps) {
 
   useEffect(() => {
     if (isProjectDetailRoute && isTraditionalMode && isDesktopViewport) {
-      setTraditionalSidebarOpen(false);
+      setTraditionalSidebarOpen(true);
     }
   }, [isDesktopViewport, isProjectDetailRoute, isTraditionalMode]);
 
@@ -378,8 +378,11 @@ export function ClientLayout({ children }: ClientLayoutProps) {
   const traditionalSidebarEnabled = traditionalShellActive && !isRouteGuardBlocking && !homeIntroActive;
   const effectiveTraditionalSidebarOpen = traditionalSidebarEnabled && traditionalSidebarOpen;
   const traditionalContentStyle = traditionalSidebarEnabled
-    ? { paddingLeft: effectiveTraditionalSidebarOpen ? traditionalSidebarWidth : 0 }
+    ? { paddingLeft: effectiveTraditionalSidebarOpen ? traditionalSidebarWidth : 0, boxSizing: 'border-box' as const }
     : undefined;
+  const traditionalInnerClassName = isProjectDetailRoute
+    ? 'px-3 py-4 lg:px-4 xl:px-5'
+    : 'px-8 py-6 xl:px-10 2xl:px-12';
 
   return (
     <>
@@ -405,10 +408,10 @@ export function ClientLayout({ children }: ClientLayoutProps) {
                 />
               )}
               <div
-                className="min-h-[calc(100vh-76px)] transition-[padding] duration-300 ease-out"
+                className="min-h-[calc(100vh-76px)] min-w-0 overflow-x-hidden transition-[padding] duration-300 ease-out"
                 style={traditionalContentStyle}
               >
-                <div className="px-8 py-6 xl:px-10 2xl:px-12">
+                <div className={traditionalInnerClassName}>
                   <AuthGuard>{children}</AuthGuard>
                 </div>
               </div>

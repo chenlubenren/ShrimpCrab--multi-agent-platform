@@ -554,6 +554,19 @@ function cleanCliStderr(stderr: string): string {
     .join('\n');
 }
 
+function isLlmFailureOutput(output: string): boolean {
+  const normalized = output.replace(/\s+/g, ' ').trim();
+  return /^LLM request failed\.?$/i.test(normalized);
+}
+
+function buildLlmFailureError(platform: AgentPlatform, output: string, stderr: string): Error {
+  const detail = cleanCliStderr(stderr);
+  const message = detail
+    ? `${platform} LLM request failed: ${detail}`
+    : `${platform} LLM request failed. Check the selected provider, model, and API endpoint.`;
+  return new Error(message);
+}
+
 function terminateProcessTree(childProcess: ChildProcess): void {
   if (isWindows && childProcess.pid) {
     try {
@@ -1057,7 +1070,13 @@ class AgentRunner extends EventEmitter {
         }
 
         if (code === 0) {
-          resolve(this.extractCliText(output));
+          const outputText = this.extractCliText(output);
+          if (isLlmFailureOutput(outputText)) {
+            session.status = 'error';
+            reject(buildLlmFailureError(session.platform, outputText, errorOutput));
+            return;
+          }
+          resolve(outputText);
         } else {
           const outputText = this.extractCliText(output);
           const stderrText = cleanCliStderr(errorOutput);
@@ -1165,7 +1184,13 @@ class AgentRunner extends EventEmitter {
         }
 
         if (code === 0) {
-          resolve(this.extractOpenClawText(output) || this.extractOpenClawText(errorOutput));
+          const outputText = this.extractOpenClawText(output) || this.extractOpenClawText(errorOutput);
+          if (isLlmFailureOutput(outputText)) {
+            session.status = 'error';
+            reject(buildLlmFailureError('openclaw', outputText, errorOutput));
+            return;
+          }
+          resolve(outputText);
         } else {
           reject(new Error(errorOutput.trim() || output.trim() || `OpenClaw exited with code ${code}`));
         }
@@ -1262,7 +1287,12 @@ class AgentRunner extends EventEmitter {
         settled = true;
         clearTimeout(timeout);
         if (code === 0) {
-          resolve(this.extractCliText(output));
+          const outputText = this.extractCliText(output);
+          if (isLlmFailureOutput(outputText)) {
+            reject(buildLlmFailureError(platform, outputText, errorOutput));
+            return;
+          }
+          resolve(outputText);
         } else {
           const outputText = this.extractCliText(output);
           const stderrText = cleanCliStderr(errorOutput);

@@ -51,16 +51,16 @@ function ProjectIconPicker({
   const activeIcon = value || DEFAULT_ICON;
 
   return (
-    <div className="border-4 border-pixel-black bg-pixel-white p-4">
-      <div className="flex items-start gap-4">
+    <div className="overflow-hidden border-4 border-pixel-black bg-pixel-white p-4">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start">
         <div className="shrink-0 border-4 border-pixel-black bg-pixel-white p-2">
-          <FolderIcon src={activeIcon} className="h-20 w-20 md:h-16 md:w-16" />
+          <FolderIcon src={activeIcon} className="h-16 w-16" />
         </div>
         <div className="min-w-0 flex-1">
           <label className="mb-2 block font-pixel text-[1.25rem] font-bold text-pixel-black md:text-base">
             项目图标
           </label>
-          <div className="grid grid-cols-3 gap-2 sm:grid-cols-6 md:grid-cols-3 lg:grid-cols-6">
+          <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
             {PROJECT_ICON_OPTIONS.map((option) => {
               const active = activeIcon === option.src;
               return (
@@ -70,7 +70,7 @@ function ProjectIconPicker({
                   onClick={() => onChange(option.src)}
                   title={option.label}
                   aria-label={`选择${option.label}项目图标`}
-                  className={`flex h-14 w-14 items-center justify-center border-2 border-pixel-black bg-pixel-white p-1 ${
+                  className={`flex h-12 w-full min-w-0 items-center justify-center border-2 border-pixel-black bg-pixel-white p-1 ${
                     active ? 'ring-4 ring-pixel-yellow' : 'hover:bg-pixel-yellow/40'
                   }`}
                 >
@@ -105,7 +105,7 @@ function ProjectEditorModal({
 }: {
   form: ProjectInput;
   architectures: Array<{ id: string; name: string }>;
-  agents: Array<Pick<Lobster, 'id' | 'name' | 'description'>>;
+  agents: Array<Pick<Lobster, 'id' | 'name' | 'description' | 'avatar'>>;
   saving: boolean;
   message: string;
   onClose: () => void;
@@ -116,8 +116,8 @@ function ProjectEditorModal({
 }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-pixel-black/70 p-3" role="dialog" aria-modal="true">
-      <section className="max-h-[92vh] w-full max-w-5xl overflow-auto border-4 border-pixel-black bg-pixel-white" style={{ boxShadow: '8px 8px 0 #101010' }}>
-        <div className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b-4 border-pixel-black bg-pixel-white p-4">
+      <section className="flex max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden border-4 border-pixel-black bg-pixel-white" style={{ boxShadow: '8px 8px 0 #101010' }}>
+        <div className="shrink-0 flex items-center justify-between gap-3 border-b-4 border-pixel-black bg-pixel-white p-4">
           <div className="min-w-0">
             <p className="truncate font-pixel text-[2rem] font-bold leading-none text-pixel-black md:text-2xl md:leading-normal">
               新建项目
@@ -136,8 +136,9 @@ function ProjectEditorModal({
           </button>
         </div>
 
-        <div className="grid gap-5 p-4 lg:grid-cols-[1fr_380px]">
-          <div className="space-y-4">
+        <div className="min-h-0 flex-1 overflow-y-auto p-4">
+          <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(300px,380px)]">
+          <div className="min-w-0 space-y-4">
             <div>
               <label className="mb-2 block font-pixel text-[1.25rem] font-bold text-pixel-black md:text-base">
                 项目名称 *
@@ -165,7 +166,7 @@ function ProjectEditorModal({
             </div>
           </div>
 
-          <div className="space-y-4">
+          <div className="min-w-0 space-y-4">
             <ProjectIconPicker
               value={form.icon}
               onChange={(value) => onUpdate('icon', value)}
@@ -193,6 +194,8 @@ function ProjectEditorModal({
                   selectedIds={form.agentIds || []}
                   selectedClassName="bg-pixel-blue text-pixel-white"
                   onToggle={onToggleAgent}
+                  defaultCollapsed
+                  showAvatars
                 />
                 <BindingPickerSection
                   title="多 Agent 协作模式"
@@ -207,7 +210,9 @@ function ProjectEditorModal({
           </div>
         </div>
 
-        <div className="flex flex-col items-stretch justify-between gap-3 border-t-4 border-pixel-black p-4 md:flex-row md:items-center">
+        </div>
+
+        <div className="shrink-0 flex flex-col items-stretch justify-between gap-3 border-t-4 border-pixel-black bg-pixel-white p-4 md:flex-row md:items-center">
           <p className="min-h-[28px] font-pixel text-[1.05rem] leading-snug text-pixel-black/65 md:text-sm">
             {message}
           </p>
@@ -227,24 +232,35 @@ function BindingPickerSection({
   selectedIds,
   selectedClassName,
   onToggle,
+  defaultCollapsed = false,
+  showAvatars = false,
 }: {
   title: string;
   emptyText: string;
-  items: Array<{ id: string; name: string; description?: string }>;
+  items: Array<{ id: string; name: string; description?: string; avatar?: string }>;
   selectedIds: string[];
   selectedClassName: string;
   onToggle: (id: string) => void;
+  defaultCollapsed?: boolean;
+  showAvatars?: boolean;
 }) {
+  const [collapsed, setCollapsed] = useState(defaultCollapsed);
+
   return (
-    <div>
-      <div className="mb-2 flex items-center justify-between gap-2">
-        <p className="font-pixel text-xs font-bold text-pixel-black">{title}</p>
+    <div className="border-2 border-pixel-black bg-pixel-white">
+      <button
+        type="button"
+        onClick={() => setCollapsed((value) => !value)}
+        className="flex w-full items-center justify-between gap-2 border-b-2 border-pixel-black bg-pixel-black/5 px-3 py-2 text-left"
+        aria-expanded={!collapsed}
+      >
+        <p className="font-pixel text-xs font-bold text-pixel-black">{collapsed ? '+' : '-'} {title}</p>
         <span className="border-2 border-pixel-black bg-pixel-white px-2 py-0.5 font-pixel text-[10px] text-pixel-black">
           {selectedIds.length}
         </span>
-      </div>
-      {items.length > 0 ? (
-        <div className="max-h-[150px] space-y-2 overflow-y-auto pr-1">
+      </button>
+      {!collapsed && (items.length > 0 ? (
+        <div className="max-h-[220px] space-y-2 overflow-y-auto p-3">
           {items.map((item) => {
             const checked = selectedIds.includes(item.id);
             return (
@@ -256,12 +272,21 @@ function BindingPickerSection({
                   checked ? selectedClassName : 'bg-pixel-white text-pixel-black hover:bg-pixel-yellow'
                 }`}
               >
-                <span className="block truncate">{checked ? '[x]' : '[ ]'} {item.name}</span>
-                {item.description && (
-                  <span className={`mt-1 block truncate text-xs ${checked ? 'text-pixel-white/75' : 'text-pixel-black/55'}`}>
-                    {item.description}
+                <span className="flex min-w-0 items-center gap-2">
+                  {showAvatars && (
+                    <span className="flex h-9 w-9 shrink-0 items-center justify-center border-2 border-pixel-black bg-pixel-white">
+                      <img src={item.avatar || '/claw_profile/03.png'} alt="" className="h-7 w-7 object-contain" style={{ imageRendering: 'pixelated' }} />
+                    </span>
+                  )}
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate">{checked ? '[x]' : '[ ]'} {item.name}</span>
+                    {item.description && (
+                      <span className={`mt-1 block truncate text-xs ${checked ? 'text-pixel-white/75' : 'text-pixel-black/55'}`}>
+                        {item.description}
+                      </span>
+                    )}
                   </span>
-                )}
+                </span>
               </button>
             );
           })}
@@ -270,7 +295,7 @@ function BindingPickerSection({
         <p className="border-2 border-dashed border-pixel-black p-3 font-pixel text-xs text-pixel-black/55">
           {emptyText}
         </p>
-      )}
+      ))}
     </div>
   );
 }

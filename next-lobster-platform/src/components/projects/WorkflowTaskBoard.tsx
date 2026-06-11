@@ -97,7 +97,7 @@ export function WorkflowTaskBoard({
   const executionMeta = execution ? EXECUTION_STATUS_META[execution.status] : null;
 
   return (
-    <aside className="flex w-full shrink-0 flex-col border-t-4 border-pixel-black bg-pixel-white lg:w-[300px] lg:border-l-4 lg:border-t-0">
+    <aside className="flex min-h-0 w-full shrink-0 flex-col border-t-4 border-pixel-black bg-pixel-white lg:h-full lg:w-[300px] lg:border-l-4 lg:border-t-0">
       <div className="flex items-center justify-between gap-2 border-b-4 border-pixel-black p-2">
         <div className="flex gap-1">
           <button
@@ -123,7 +123,7 @@ export function WorkflowTaskBoard({
       </div>
 
       {tab === 'tasks' ? (
-        <div className="flex-1 overflow-y-auto p-2">
+        <div className="min-h-0 flex-1 overflow-y-auto p-2">
           {!execution ? (
             <p className="p-3 text-center font-pixel text-xs text-pixel-black/50">还没有执行记录。提交任务后，这里会实时显示每个 Agent 的工作状态。</p>
           ) : (
@@ -145,6 +145,7 @@ export function WorkflowTaskBoard({
                   ?? agentLookup.byName.get(node.agentName || '');
                 const agentName = agent?.name || node.agentName || node.label;
                 const agentAvatar = agent?.avatar || '/claw_profile/03.png';
+                const llmFailed = isLlmFailureText(node.output);
                 return (
                   <div key={node.nodeId} className={`mb-2 border-2 border-pixel-black p-2 ${node.status === 'running' ? 'bg-pixel-yellow/20' : 'bg-pixel-white'}`}>
                     <div className="flex items-center justify-between gap-2">
@@ -168,13 +169,15 @@ export function WorkflowTaskBoard({
                           )}
                         </span>
                       </span>
-                      <span className={`shrink-0 border-2 border-pixel-black px-1.5 py-0.5 font-pixel text-[10px] ${node.degraded ? 'bg-pixel-red text-pixel-white' : meta.className}`}>
-                        {node.degraded ? '降级' : node.status === 'running' ? `${meta.label}…` : meta.label}
+                      <span className={`shrink-0 border-2 border-pixel-black px-1.5 py-0.5 font-pixel text-[10px] ${node.degraded || llmFailed ? 'bg-pixel-red text-pixel-white' : meta.className}`}>
+                        {node.degraded ? '降级' : llmFailed ? 'LLM失败' : node.status === 'running' ? `${meta.label}…` : meta.label}
                       </span>
                     </div>
-                    {node.degraded && (
+                    {(node.degraded || llmFailed) && (
                       <p className="mt-1 border-2 border-pixel-red bg-pixel-red/10 p-1 font-pixel text-[10px] leading-snug text-pixel-red">
-                        未真正执行：未配置可用的 LLM API Key。请在「管理团队 → 配置团队 API Key」中绑定后重试。
+                        {node.degraded
+                          ? '未真正执行：请为该 Agent 绑定可用的 LLM 后重试。'
+                          : 'LLM 请求失败：当前供应商/模型暂未返回可用结果，请检查供应商状态后重试。'}
                       </p>
                     )}
                     {node.task && (
@@ -198,7 +201,7 @@ export function WorkflowTaskBoard({
           )}
         </div>
       ) : (
-        <div className="flex-1 overflow-y-auto p-2">
+        <div className="min-h-0 flex-1 overflow-y-auto p-2">
           {visibleDeliverables.length === 0 ? (
             <p className="p-3 text-center font-pixel text-xs text-pixel-black/50">还没有登记的交付物。Agent 在工作区生成或修改文件后会自动出现在这里。</p>
           ) : (
@@ -264,6 +267,10 @@ export function WorkflowTaskBoard({
       )}
     </aside>
   );
+}
+
+function isLlmFailureText(value?: string | null): boolean {
+  return /^LLM request failed\.?$/i.test((value || '').replace(/\s+/g, ' ').trim());
 }
 
 function nodeDuration(startedAt?: string, completedAt?: string, runningNowMs?: number): string {

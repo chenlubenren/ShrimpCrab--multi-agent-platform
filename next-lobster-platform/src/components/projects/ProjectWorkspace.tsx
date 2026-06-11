@@ -529,7 +529,7 @@ export function ProjectWorkspace({
           await sleep(getWorkflowPollRetryDelay(consecutivePollErrors));
         }
       }
-      const replyRole: ChatRole = current.status === 'failed'
+      const replyRole: ChatRole = current.status === 'failed' || executionHasLlmFailureOutput(current)
         ? 'error'
         : TERMINAL_STATUSES.includes(current.status)
           ? 'assistant'
@@ -551,7 +551,7 @@ export function ProjectWorkspace({
   };
 
   return (
-    <section className="mt-6 border-4 border-pixel-black bg-pixel-white" style={{ boxShadow: '6px 6px 0 #101010' }}>
+    <section className="mt-4 min-w-0 overflow-hidden border-4 border-pixel-black bg-pixel-white" style={{ boxShadow: '6px 6px 0 #101010' }}>
       <div className="border-b-4 border-pixel-black p-4">
         <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(360px,520px)] xl:items-start">
           <div className="min-w-0">
@@ -573,7 +573,7 @@ export function ProjectWorkspace({
         </div>
       </div>
 
-      <div className="flex flex-col bg-pixel-white lg:flex-row">
+      <div className="flex min-h-[640px] flex-col bg-pixel-white lg:h-[calc(100dvh-252px)] lg:min-h-[560px] lg:max-h-[calc(100dvh-150px)] lg:min-w-0 lg:flex-row lg:overflow-hidden">
         <ProjectFilePanel
           project={project}
           collapsed={fileCollapsed}
@@ -583,8 +583,8 @@ export function ProjectWorkspace({
           onOpenFile={(relativePath) => void openFilePreview(relativePath)}
         />
 
-        <div className="min-w-0 flex-1 border-t-4 border-pixel-black bg-pixel-white lg:border-l-4 lg:border-t-0">
-          <div className="grid min-h-[620px] grid-rows-[auto_1fr_auto]">
+        <div className="min-h-0 min-w-0 flex-1 border-t-4 border-pixel-black bg-pixel-white lg:border-l-4 lg:border-t-0">
+          <div className="grid min-h-[620px] grid-rows-[auto_1fr_auto] lg:h-full lg:min-h-0">
             <div className="grid gap-3 border-b-4 border-pixel-black p-3 xl:grid-cols-[260px_1fr]">
               <div className="border-2 border-pixel-black bg-pixel-white">
                 <div className="flex items-center justify-between border-b-2 border-pixel-black px-3 py-2">
@@ -623,7 +623,7 @@ export function ProjectWorkspace({
               <PlanProgressPanel execution={latestExecution} />
             </div>
 
-            <div className="overflow-y-auto p-3">
+            <div className="min-h-0 overflow-y-auto p-3">
               <div className="flex w-full flex-col gap-3">
                 {activeMode === 'agent' && activeAgent && (
                   <div className="border-4 border-pixel-black bg-pixel-yellow p-3 font-pixel text-sm text-pixel-black">
@@ -790,7 +790,7 @@ function ProjectFilePanel({
 
   if (collapsed) {
     return (
-      <aside className="shrink-0 border-b-4 border-pixel-black bg-pixel-white lg:border-b-0" style={{ width: 64, maxWidth: '100%' }}>
+      <aside className="shrink-0 border-b-4 border-pixel-black bg-pixel-white lg:h-full lg:border-b-0" style={{ width: 64, maxWidth: '100%' }}>
         <button type="button" onClick={() => onCollapsedChange(false)} className="flex h-full min-h-[74px] w-full flex-col items-center justify-center gap-1 bg-pixel-white p-2 font-pixel text-xs text-pixel-black hover:bg-pixel-yellow" aria-label="展开文件浏览">
           <span className="text-lg leading-none">→</span>
           <span className="leading-none">文件</span>
@@ -800,7 +800,7 @@ function ProjectFilePanel({
   }
 
   return (
-    <aside className="relative shrink-0 border-b-4 border-pixel-black bg-pixel-white lg:border-b-0" style={{ width, maxWidth: '100%' }}>
+    <aside className="relative shrink-0 border-b-4 border-pixel-black bg-pixel-white lg:h-full lg:min-h-0 lg:border-b-0" style={{ width, maxWidth: '100%' }}>
       <div className="flex items-center justify-between border-b-4 border-pixel-black px-3 py-2">
         <div className="min-w-0">
           <p className="font-pixel text-sm font-bold leading-none text-pixel-black">文件浏览</p>
@@ -811,7 +811,7 @@ function ProjectFilePanel({
         </div>
       </div>
 
-      <div className="h-[390px] overflow-auto bg-pixel-white py-1 font-mono text-[11px] text-pixel-black md:h-[560px]">
+      <div className="h-[390px] overflow-auto bg-pixel-white py-1 font-mono text-[11px] text-pixel-black md:h-[560px] lg:h-[calc(100%-56px)] lg:min-h-0">
         {loading && <p className="px-3 py-2 font-pixel text-xs text-pixel-black/55">读取文件中...</p>}
         {error && <p className="px-3 py-2 font-pixel text-xs text-pixel-red">{error}</p>}
         {!loading && !error && tree?.root.children?.length === 0 && <p className="px-3 py-2 font-pixel text-xs text-pixel-black/55">当前工作区还没有文件。</p>}
@@ -1332,6 +1332,9 @@ function resolveArchitectureDsl(architecture: Architecture): WorkflowDsl | null 
 }
 
 function buildExecutionReply(execution: WorkflowExecution): string {
+  if (executionHasLlmFailureOutput(execution)) {
+    return execution.error || 'LLM 请求失败：当前绑定的供应商/模型没有返回可用结果，请检查供应商状态、模型和 API 地址后重试。';
+  }
   if (execution.status === 'queued' || execution.status === 'running') {
     return '团队任务仍在执行中。请保持页面打开，或稍后刷新项目查看最新进度。';
   }
@@ -1346,6 +1349,15 @@ function buildExecutionReply(execution: WorkflowExecution): string {
     ? `\n\n产物：\n${execution.artifacts.slice(-6).map((artifact) => `- ${artifact.relativePath || artifact.path}`).join('\n')}`
     : '';
   return `${shortText(finalOutput || lastNodeOutput || '执行完成，但没有返回文本结果。', 1800)}${artifacts}`;
+}
+
+function isLlmFailureText(value?: string | null): boolean {
+  return /^LLM request failed\.?$/i.test((value || '').replace(/\s+/g, ' ').trim());
+}
+
+function executionHasLlmFailureOutput(execution: WorkflowExecution): boolean {
+  if (isLlmFailureText(execution.finalOutput)) return true;
+  return Object.values(execution.nodeStates).some((state) => isLlmFailureText(state.output));
 }
 
 function getProjectIntro(project: Project): string {

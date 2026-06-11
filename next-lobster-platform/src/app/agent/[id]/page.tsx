@@ -871,7 +871,7 @@ export default function AgentChatPage() {
   }
 
   return (
-    <div className="flex h-[100dvh] min-h-0 flex-col overflow-hidden bg-pixel-cream md:min-h-screen md:overflow-visible">
+    <div className="flex h-[100dvh] min-h-0 flex-col overflow-hidden bg-pixel-cream">
       {/* Header */}
       <motion.div
         initial={{ opacity: 0, y: -20 }}
@@ -1124,7 +1124,7 @@ export default function AgentChatPage() {
       {/* Main Content Area */}
       <div className="flex min-h-0 flex-1 overflow-hidden">
         {/* Chat / Monitor / Settings Content */}
-        <div className={`min-h-0 flex-1 ${activeTab === 'chat' ? 'overflow-hidden' : 'overflow-y-auto'} md:overflow-y-auto`}>
+        <div className={`min-h-0 flex-1 ${activeTab === 'chat' ? 'overflow-hidden' : 'overflow-y-auto'}`}>
           {activeTab === 'chat' && (
             <ChatView
               messages={messages}
@@ -1467,7 +1467,7 @@ function ChatView(props: ChatViewProps) {
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-pixel-cream md:mx-auto md:block md:max-w-4xl md:p-4">
+    <div className="mx-auto flex h-full min-h-0 w-full max-w-6xl flex-col bg-pixel-cream md:p-4">
       <div className="mb-3 hidden border-4 border-pixel-black bg-pixel-white p-3 md:block" style={{ boxShadow: '4px 4px 0px 0px #101010' }}>
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
           <div className="relative min-w-0 flex-1" ref={sessionMenuRef}>
@@ -1612,7 +1612,7 @@ function ChatView(props: ChatViewProps) {
           </div>
         )}
       </div>
-      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.2 }} className="rpg-dialog relative flex min-h-0 flex-1 flex-col max-md:!border-x-0 max-md:!shadow-none md:h-[800px]">
+      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.2 }} className="rpg-dialog relative flex min-h-0 flex-1 flex-col max-md:!border-x-0 max-md:!shadow-none">
         <div className="absolute top-0 left-0 z-10 hidden h-6 w-6 border-b-4 border-r-4 border-pixel-black bg-pixel-white md:block" />
         <div className="absolute top-0 right-0 z-10 hidden h-6 w-6 border-b-4 border-l-4 border-pixel-black bg-pixel-white md:block" />
         <div className="absolute bottom-0 left-0 z-10 hidden h-6 w-6 border-r-4 border-t-4 border-pixel-black bg-pixel-white md:block" />

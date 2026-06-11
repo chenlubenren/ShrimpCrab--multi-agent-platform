@@ -12,8 +12,8 @@ import { API_BASE } from '@/lib/runtime';
 type MarketTabKey = 'market' | 'team' | 'social';
 type MarketDisplayMode = 'grid' | 'category';
 type AdoptPlatform = 'openclaw' | 'hermes' | 'opencode';
-type MarketCategoryKey = AdoptPlatform | 'codex' | 'claude-code';
-type AgentCategoryKey = MarketCategoryKey | 'uncategorized';
+type MarketCategoryKey = AdoptPlatform | 'codex' | 'claude-code' | 'other';
+type AgentCategoryKey = MarketCategoryKey;
 
 interface PlatformHouse {
   id: AdoptPlatform;
@@ -109,6 +109,14 @@ const MARKET_CATEGORIES: MarketCategory[] = [
     avatar: '/agent-icons/claude-code.svg',
     bg: 'bg-purple-700',
   },
+  {
+    id: 'other',
+    name: '其他村子',
+    eyebrow: 'OTHERS',
+    description: '收纳未标注平台、自定义上传或新型 Agent。',
+    avatar: '/claw_profile/04.png',
+    bg: 'bg-pixel-gray',
+  },
 ];
 
 const CATEGORY_CARD_TONES: Record<MarketCategoryKey, string> = {
@@ -117,6 +125,7 @@ const CATEGORY_CARD_TONES: Record<MarketCategoryKey, string> = {
   opencode: 'bg-amber-600',
   codex: 'bg-pixel-black',
   'claude-code': 'bg-purple-700',
+  other: 'bg-pixel-gray',
 };
 
 interface MarketAgent {
@@ -222,7 +231,7 @@ function getAgentCategory(agent: MarketAgent): AgentCategoryKey {
   if (joined.includes('platform:opencode') || joined.includes('opencode')) return 'opencode';
   if (joined.includes('platform:codex') || joined.includes('codex')) return 'codex';
   if (joined.includes('platform:claude-code') || joined.includes('claude-code') || joined.includes('claude')) return 'claude-code';
-  return 'uncategorized';
+  return 'other';
 }
 
 function normalizeTab(value: string | null): MarketTabKey {
@@ -1266,7 +1275,6 @@ function CommunityAgentsSection({ token, onEnterHouse }: { token: string; onEnte
     for (const category of MARKET_CATEGORIES) grouped.set(category.id, []);
     for (const agent of agents) {
       const category = getAgentCategory(agent);
-      if (category === 'uncategorized') continue;
       grouped.set(category, [...(grouped.get(category) || []), agent]);
     }
     return grouped;
@@ -1361,7 +1369,7 @@ function CommunityAgentsSection({ token, onEnterHouse }: { token: string; onEnte
       )}
 
       {!loading && displayMode === 'category' && !selectedCategoryMeta && (
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-5">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
           {MARKET_CATEGORIES.map((category, categoryIndex) => {
             const categoryAgents = agentsByCategory.get(category.id) || [];
             return (
@@ -1373,8 +1381,8 @@ function CommunityAgentsSection({ token, onEnterHouse }: { token: string; onEnte
                 transition={{ delay: categoryIndex * 0.04 }}
                 whileHover={{ y: -3 }}
                 onClick={() => setSelectedCategory(category.id)}
-                className="group flex min-h-[220px] flex-col border-[3px] border-pixel-black bg-pixel-white text-left transition-transform"
-                style={{ boxShadow: '3px 3px 0px 0px #101010' }}
+                className="group flex min-h-[240px] flex-col border-[4px] border-pixel-black bg-pixel-white text-left transition-transform"
+                style={{ boxShadow: '6px 6px 0px 0px #101010' }}
               >
                 <div className={`flex items-center justify-between border-b-[3px] border-pixel-black p-3 ${CATEGORY_CARD_TONES[category.id]} text-pixel-white`}>
                   <span className="font-pixel text-[10px] font-bold uppercase tracking-[0.12em]">{category.eyebrow}</span>
