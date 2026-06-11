@@ -413,7 +413,10 @@ class WorkflowExecutorService extends EventEmitter {
       await Promise.race(runtime.running.values());
     }
 
-    if (execution.status !== 'running') return;
+    if (execution.status !== 'running') {
+      this.persistExecutionToDisk(execution);
+      return;
+    }
 
     const failed = Object.values(execution.nodeStates).find((state) => state.status === 'failed');
     if (failed) {
@@ -557,7 +560,7 @@ class WorkflowExecutorService extends EventEmitter {
     task: string
   ): Promise<string> {
     const state = runtime.execution.nodeStates[node.id];
-    if (!node.agentInstanceId || runtime.execution.dryRun) {
+    if (runtime.execution.dryRun) {
       state.agentName = node.label;
       await sleep(Number(process.env.WORKFLOW_DRY_RUN_NODE_DELAY_MS || 120));
       const outputLines = [
@@ -574,13 +577,13 @@ class WorkflowExecutorService extends EventEmitter {
       return outputLines.join('\n');
     }
 
+    if (!node.agentInstanceId) {
+      throw new Error(`节点 "${node.label}" 未绑定可执行 Agent，已停止执行以避免生成假结果。请先在团队中绑定真实 Agent 后重试。`);
+    }
+
     const agent = await getAgentByIdAndUser(node.agentInstanceId, runtime.execution.userId);
     if (!agent) {
-      return this.runUnboundAgentFallback(
-        runtime,
-        node,
-        `绑定的 Agent 不存在或当前用户无权限：${node.agentInstanceId}`
-      );
+      throw new Error(`节点 "${node.label}" 绑定的 Agent 不存在或当前用户无权限：${node.agentInstanceId}`);
     }
 
     state.agentName = agent.name;
@@ -625,64 +628,14 @@ class WorkflowExecutorService extends EventEmitter {
       });
     }
 
-    try {
-      return await agentRunner.executeMessage(
-        agent.id,
-        platform,
-        runtime.sharedWorkspacePath,
-        runtimePrompt,
-        workflowProviderConfig,
-        Math.max(1, Math.floor(runtime.dsl.execution.timeoutSec || 1800)) * 1000
-      );
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (!shouldFallbackOnCliError(message)) {
-        throw error;
-      }
-      // Mark the node as degraded so the UI shows a warning instead of a success.
-      const fallbackState = runtime.execution.nodeStates[node.id];
-      fallbackState.degraded = true;
-      fallbackState.degradedReason = describeFallbackReason(message);
-      await sleep(Number(process.env.WORKFLOW_DRY_RUN_NODE_DELAY_MS || 120));
-      const fallbackTask = fallbackState.task || task;
-      this.writeFallbackHandoff(
-        runtime,
-        node,
-        fallbackTask,
-        'CLI unavailable fallback handoff',
-        [`Platform: ${platform}`, `Reason: ${message}`]
-      );
-      return [
-        `[降级] ${agent.name} 未能真正执行：${fallbackState.degradedReason}`,
-        `平台：${platform}`,
-        `原始错误：${message}`,
-      ].join('\n');
-    }
-  }
-
-  private async runUnboundAgentFallback(
-    runtime: RuntimeState,
-    node: WorkflowDslNode,
-    reason: string
-  ): Promise<string> {
-    const state = runtime.execution.nodeStates[node.id];
-    state.agentName = node.label;
-    state.degraded = true;
-    state.degradedReason = '该节点未绑定可执行 Agent';
-    await sleep(Number(process.env.WORKFLOW_DRY_RUN_NODE_DELAY_MS || 120));
-    const fallbackTask = state.task || runtime.execution.task;
-    this.writeFallbackHandoff(
-      runtime,
-      node,
-      fallbackTask,
-      'unbound-agent fallback handoff',
-      [`Reason: ${reason}`]
+    return agentRunner.executeMessage(
+      agent.id,
+      platform,
+      runtime.sharedWorkspacePath,
+      runtimePrompt,
+      workflowProviderConfig,
+      Math.max(1, Math.floor(runtime.dsl.execution.timeoutSec || 1800)) * 1000
     );
-    return [
-      `[降级] ${node.label} 未绑定可执行 Agent，未真正执行。`,
-      `角色：${node.role || node.label}`,
-      `原因：${reason}`,
-    ].join('\n');
   }
 
   private writeFallbackHandoff(
@@ -1435,25 +1388,6 @@ function cloneExecution(execution: WorkflowExecution): WorkflowExecution {
     delete state.runnerPrompt;
   }
   return cloned;
-}
-
-function shouldFallbackOnCliError(message: string): boolean {
-  if (process.env.WORKFLOW_DISABLE_CLI_FALLBACK === '1') return false;
-  return /ENOENT|not installed|not in PATH|command not found|not recognized|not logged in|please run \/login|authentication|unauthorized|api key|missing credentials|timed out/i.test(message);
-}
-
-/** Translate a raw CLI error into a short human-readable degradation reason. */
-function describeFallbackReason(message: string): string {
-  if (/ProviderAuthError|authentication|unauthorized|api key|missing credentials|not logged in|please run \/login/i.test(message)) {
-    return '未配置可用的 LLM API Key（鉴权失败）';
-  }
-  if (/ENOENT|not installed|not in PATH|command not found|not recognized/i.test(message)) {
-    return 'Agent CLI 未安装或不可用';
-  }
-  if (/timed out/i.test(message)) {
-    return 'Agent CLI 执行超时';
-  }
-  return 'Agent CLI 不可用';
 }
 
 /** OpenClaw runtime scaffold files; never user-facing deliverables. */

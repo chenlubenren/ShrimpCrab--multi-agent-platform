@@ -24,6 +24,7 @@ const SIDEBAR_OPEN_STORAGE_KEY = 'openclaw.traditionalSidebarOpen';
 const SIDEBAR_DEFAULT_WIDTH = 292;
 const SIDEBAR_MIN_WIDTH = 236;
 const SIDEBAR_MAX_WIDTH = 420;
+const SIDEBAR_WORKSPACE_GAP = 10;
 const HOME_INTRO_STORAGE_KEY = 'hasSeenHeroAnimation';
 const HOME_INTRO_COMPLETE_EVENT = 'openclaw:home-intro-complete';
 
@@ -377,8 +378,11 @@ export function ClientLayout({ children }: ClientLayoutProps) {
   const traditionalShellActive = isTraditionalMode && isDesktopViewport;
   const traditionalSidebarEnabled = traditionalShellActive && !isRouteGuardBlocking && !homeIntroActive;
   const effectiveTraditionalSidebarOpen = traditionalSidebarEnabled && traditionalSidebarOpen;
+  const traditionalSidebarOffset = effectiveTraditionalSidebarOpen
+    ? traditionalSidebarWidth + SIDEBAR_WORKSPACE_GAP
+    : 0;
   const traditionalContentStyle = traditionalSidebarEnabled
-    ? { paddingLeft: effectiveTraditionalSidebarOpen ? traditionalSidebarWidth : 0, boxSizing: 'border-box' as const }
+    ? { paddingLeft: traditionalSidebarOffset, boxSizing: 'border-box' as const }
     : undefined;
   const traditionalInnerClassName = isProjectDetailRoute
     ? 'px-3 py-4 lg:px-4 xl:px-5'
@@ -390,7 +394,7 @@ export function ClientLayout({ children }: ClientLayoutProps) {
         <Header
           traditionalMode={isTraditionalMode}
           traditionalSidebarOpen={effectiveTraditionalSidebarOpen}
-          traditionalSidebarWidth={traditionalSidebarWidth}
+          traditionalSidebarWidth={traditionalSidebarOffset}
         />
       </div>
       <main data-app-main="true" data-traditional-home={isTraditionalHome ? 'true' : undefined} className={mainClassName}>
@@ -423,7 +427,7 @@ export function ClientLayout({ children }: ClientLayoutProps) {
       </main>
       <footer
         className="hidden border-t-4 border-pixel-red bg-pixel-black py-4 transition-[padding] duration-300 ease-out md:block"
-        style={effectiveTraditionalSidebarOpen ? { paddingLeft: traditionalSidebarWidth } : undefined}
+        style={effectiveTraditionalSidebarOpen ? { paddingLeft: traditionalSidebarOffset } : undefined}
       >
         <div className={`${isTraditionalMode ? 'mx-0 w-full max-w-none px-8 xl:px-10 2xl:px-12' : 'max-w-7xl mx-auto'} text-center font-pixel text-pixel-white text-xs`}>
           <p>虾兵蟹将 - 高效AI团队协作 | Efficient AI Team Collaboration</p>

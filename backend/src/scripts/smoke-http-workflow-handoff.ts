@@ -1,6 +1,3 @@
-import fs from 'fs';
-import path from 'path';
-
 const API_BASE = process.env.SMOKE_API_BASE || 'http://localhost:3002';
 const unique = `${Date.now()}_${Math.random().toString(16).slice(2)}`;
 
@@ -25,7 +22,9 @@ interface WorkflowArtifactPayload {
 }
 
 interface WorkflowNodeStatePayload {
-  input?: string;
+  status?: string;
+  error?: string;
+  output?: string;
   artifacts?: WorkflowArtifactPayload[];
 }
 
@@ -34,11 +33,11 @@ interface WorkflowExecutionPayload {
   status: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
   error?: string;
   projectId?: string;
-  projectWorkspacePath?: string;
   sharedWorkspacePath?: string;
   runWorkspacePath?: string;
   nodeStates?: Record<string, WorkflowNodeStatePayload>;
   finalOutput?: string;
+  artifacts?: WorkflowArtifactPayload[];
 }
 
 interface WorkflowPayload {
@@ -114,8 +113,8 @@ async function main() {
 
     const workflowDsl = {
       schemaVersion: '1.0',
-      name: 'HTTP Workflow Handoff Smoke',
-      description: 'Verifies /api/workflows/execute exposes upstream workspace files to downstream nodes.',
+      name: 'HTTP Workflow Real Failure Smoke',
+      description: 'Verifies /api/workflows/execute fails when a non-dry-run node has no real agent.',
       entryNodeId: 'node-start',
       nodes: [
         { id: 'node-start', type: 'start', label: 'Start' },
@@ -123,24 +122,14 @@ async function main() {
           id: 'agent-writer',
           type: 'agent',
           label: 'HTTP Writer',
-          agentInstanceId: `missing-writer-${unique}`,
-          role: 'Write a handoff file for the downstream reviewer.',
+          role: 'Write a real project deliverable.',
           kind: 'worker',
-        },
-        {
-          id: 'agent-reviewer',
-          type: 'agent',
-          label: 'HTTP Reviewer',
-          agentInstanceId: `missing-reviewer-${unique}`,
-          role: 'Read upstream handoff files before responding.',
-          kind: 'evaluator',
         },
         { id: 'node-end', type: 'end', label: 'End' },
       ],
       edges: [
         { id: 'edge-start-writer', from: 'node-start', to: 'agent-writer' },
-        { id: 'edge-writer-reviewer', from: 'agent-writer', to: 'agent-reviewer' },
-        { id: 'edge-reviewer-end', from: 'agent-reviewer', to: 'node-end' },
+        { id: 'edge-writer-end', from: 'agent-writer', to: 'node-end' },
       ],
       execution: {
         mode: 'dag',
@@ -154,8 +143,8 @@ async function main() {
       headers: authHeaders(token),
       body: JSON.stringify({
         workflowDsl,
-        task: 'Create a project handoff file, then have the reviewer consume it through the HTTP workflow API.',
-        architectureId: 'http-smoke-workflow-handoff',
+        task: 'Create a real project deliverable. This must fail if no executable agent is bound.',
+        architectureId: 'http-smoke-workflow-real-failure',
         projectId,
         dryRun: false,
       }),
@@ -164,42 +153,20 @@ async function main() {
     if (!started?.id) throw new Error(`Workflow start did not return an execution id: ${JSON.stringify(startPayload)}`);
 
     const execution = await waitForExecution(token, started.id);
-    if (execution.status !== 'succeeded') {
-      throw new Error(`Expected succeeded, got ${execution.status}: ${execution.error || ''}`);
+    const writerState = execution.nodeStates?.['agent-writer'];
+    const error = writerState?.error || execution.error || '';
+
+    if (execution.status !== 'failed') {
+      throw new Error(`Expected failed, got ${execution.status}: ${execution.finalOutput || ''}`);
     }
     if (execution.projectId !== projectId) {
       throw new Error(`Execution did not keep projectId. Expected ${projectId}, got ${execution.projectId}`);
     }
-    if (execution.sharedWorkspacePath !== project.workspacePath) {
-      throw new Error(`Expected shared workspace to be project workspace: ${execution.sharedWorkspacePath}`);
+    if (!/未绑定可执行 Agent/.test(error)) {
+      throw new Error(`Expected unbound-agent failure, got: ${error}`);
     }
-    if (!execution.runWorkspacePath?.startsWith(path.join(project.workspacePath, '.openclaw', 'workflow-runs'))) {
-      throw new Error(`Run workspace is not under project .openclaw/workflow-runs: ${execution.runWorkspacePath}`);
-    }
-
-    const writerState = execution.nodeStates?.['agent-writer'];
-    const reviewerState = execution.nodeStates?.['agent-reviewer'];
-    const handoffArtifact = writerState?.artifacts?.find(
-      (artifact) => artifact.kind === 'workspace-file' && artifact.relativePath?.startsWith('handoff/')
-    );
-    if (!handoffArtifact?.path || !handoffArtifact.relativePath) {
-      throw new Error('Writer did not record a workspace handoff artifact.');
-    }
-    if (!fs.existsSync(handoffArtifact.path)) {
-      throw new Error(`Handoff artifact file does not exist: ${handoffArtifact.path}`);
-    }
-    const handoffContent = fs.readFileSync(handoffArtifact.path, 'utf-8');
-    if (!handoffContent.includes('unbound-agent fallback handoff') || !handoffContent.includes('agent-writer')) {
-      throw new Error('HTTP workflow handoff file did not include expected fallback content.');
-    }
-    if (!reviewerState?.input?.includes(handoffArtifact.path) || !reviewerState.input.includes('### Handoff files')) {
-      throw new Error('Reviewer input did not include formatted upstream handoff metadata.');
-    }
-    if (!reviewerState.input.includes('contentPreview') || !reviewerState.input.includes('unbound-agent fallback handoff')) {
-      throw new Error('Reviewer input did not include upstream handoff file content preview.');
-    }
-    if (!execution.finalOutput?.includes('HTTP Reviewer')) {
-      throw new Error('Final output did not include downstream reviewer output.');
+    if (writerState?.output || writerState?.artifacts?.some((artifact) => artifact.kind === 'workspace-file')) {
+      throw new Error('HTTP workflow produced fallback output or workspace artifacts for an unbound real run.');
     }
 
     console.log(JSON.stringify({
@@ -210,11 +177,7 @@ async function main() {
       status: execution.status,
       sharedWorkspacePath: execution.sharedWorkspacePath,
       runWorkspacePath: execution.runWorkspacePath,
-      handoffPath: handoffArtifact.path,
-      handoffRelativePath: handoffArtifact.relativePath,
-      reviewerSawHandoff: reviewerState.input.includes(handoffArtifact.path),
-      reviewerSawFormattedHandoff: reviewerState.input.includes('### Handoff files'),
-      reviewerSawHandoffContentPreview: reviewerState.input.includes('unbound-agent fallback handoff'),
+      fallbackSuccessPrevented: true,
     }, null, 2));
   } finally {
     if (token && projectId) {
