@@ -46,6 +46,7 @@ const OFFICIAL_AGENT_TAGS = [
   'official-lobster',
   'quick-adopt',
   'openclaw-workspace',
+  'platform:openclaw',
 ];
 
 const ADOPT_SUPPORTED_PLATFORMS = ['openclaw', 'hermes', 'opencode'] as const;

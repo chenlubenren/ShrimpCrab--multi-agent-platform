@@ -111,6 +111,14 @@ const MARKET_CATEGORIES: MarketCategory[] = [
   },
 ];
 
+const CATEGORY_CARD_TONES: Record<MarketCategoryKey, string> = {
+  openclaw: 'bg-pixel-green',
+  hermes: 'bg-pixel-blue',
+  opencode: 'bg-amber-600',
+  codex: 'bg-pixel-black',
+  'claude-code': 'bg-purple-700',
+};
+
 interface MarketAgent {
   id: string;
   name: string;
@@ -647,6 +655,58 @@ interface TeamTemplateData {
 
 // ==================== Team Template Components ====================
 
+function TeamAvatarGrid({
+  members,
+  fallback,
+  className = 'h-10 w-10',
+}: {
+  members: TeamTemplateMember[];
+  fallback: string;
+  className?: string;
+}) {
+  const avatars = members.length > 0 ? members.slice(0, 4) : [{ roleCode: 'fallback', avatar: fallback, name: 'Team' }];
+  const count = avatars.length;
+
+  const getSlotClass = (index: number) => {
+    if (count === 1) return 'left-1/2 top-1/2 h-[62%] w-[62%] -translate-x-1/2 -translate-y-1/2';
+    if (count === 2) {
+      return index === 0
+        ? 'left-[12%] top-1/2 h-[42%] w-[42%] -translate-y-1/2'
+        : 'right-[12%] top-1/2 h-[42%] w-[42%] -translate-y-1/2';
+    }
+    if (count === 3) {
+      if (index === 0) return 'left-1/2 top-[10%] h-[38%] w-[38%] -translate-x-1/2';
+      return index === 1
+        ? 'left-[12%] bottom-[10%] h-[38%] w-[38%]'
+        : 'right-[12%] bottom-[10%] h-[38%] w-[38%]';
+    }
+    return [
+      'left-[8%] top-[8%] h-[40%] w-[40%]',
+      'right-[8%] top-[8%] h-[40%] w-[40%]',
+      'left-[8%] bottom-[8%] h-[40%] w-[40%]',
+      'right-[8%] bottom-[8%] h-[40%] w-[40%]',
+    ][index] || 'left-[8%] top-[8%] h-[40%] w-[40%]';
+  };
+
+  return (
+    <div className={`relative overflow-hidden border-2 border-pixel-black bg-[#d9ead7] ${className}`}>
+      {avatars.map((member, index) => (
+        <span
+          key={member.roleCode || index}
+          className={`absolute flex items-center justify-center overflow-hidden bg-pixel-white ${getSlotClass(index)}`}
+        >
+          <img
+            src={member.avatar || fallback}
+            alt=""
+            className="h-full w-full object-contain p-[1px]"
+            style={{ imageRendering: 'pixelated' }}
+          />
+        </span>
+      ))}
+    </div>
+  );
+}
+
 function TeamAdoptModal({
   template,
   onClose,
@@ -696,12 +756,17 @@ function TeamAdoptModal({
           className="px-4 py-3 border-b-[3px] border-pixel-black"
           style={{ background: template.color }}
         >
-          <h2 className="font-pixel text-lg font-bold text-pixel-white">
-            一键领养团队
-          </h2>
-          <p className="font-pixel text-xs text-pixel-white/80">
-            {template.memberCount} 个 Agent · {template.category}
-          </p>
+          <div className="flex items-center gap-3">
+            <TeamAvatarGrid members={template.members} fallback={template.avatar} className="h-12 w-12" />
+            <div>
+              <h2 className="font-pixel text-lg font-bold text-pixel-white">
+                一键领养团队
+              </h2>
+              <p className="font-pixel text-xs text-pixel-white/80">
+                {template.memberCount} 个 Agent · {template.category}
+              </p>
+            </div>
+          </div>
         </div>
 
         <div className="p-4 space-y-4">
@@ -810,10 +875,15 @@ function TeamDetailModal({
           className="px-5 py-4 border-b-[3px] border-pixel-black"
           style={{ background: template.color }}
         >
-          <h2 className="font-pixel text-xl font-bold text-pixel-white">{template.name}</h2>
-          <p className="mt-1 font-pixel text-xs text-pixel-white/80">
-            {template.category} · {template.memberCount} Agents · {template.platform.toUpperCase()}
-          </p>
+          <div className="flex items-center gap-3">
+            <TeamAvatarGrid members={template.members} fallback={template.avatar} className="h-14 w-14" />
+            <div className="min-w-0">
+              <h2 className="truncate font-pixel text-xl font-bold text-pixel-white">{template.name}</h2>
+              <p className="mt-1 font-pixel text-xs text-pixel-white/80">
+                {template.category} · {template.memberCount} Agents · {template.platform.toUpperCase()}
+              </p>
+            </div>
+          </div>
         </div>
 
         <div className="p-5 space-y-5">
@@ -997,14 +1067,7 @@ function TeamHouseDetailPage({ onBack }: { onBack?: () => void }) {
                 style={{ background: tpl.color }}
               >
                 <div className="flex items-center gap-3">
-                  <div className="flex h-10 w-10 items-center justify-center border-2 border-pixel-black bg-pixel-white">
-                    <img
-                      src={tpl.avatar}
-                      alt=""
-                      className="h-7 w-7 object-contain"
-                      style={{ imageRendering: 'pixelated' }}
-                    />
-                  </div>
+                  <TeamAvatarGrid members={tpl.members} fallback={tpl.avatar} className="h-12 w-12" />
                   <div>
                     <h4 className="font-pixel text-base font-bold text-pixel-white">{tpl.name}</h4>
                     <p className="font-pixel text-[10px] text-pixel-white/70 uppercase tracking-wider">
@@ -1177,6 +1240,7 @@ function CommunityAgentsSection({ token, onEnterHouse }: { token: string; onEnte
   const [loading, setLoading] = useState(true);
   const [downloading, setDownloading] = useState<string | null>(null);
   const [displayMode, setDisplayMode] = useState<MarketDisplayMode>('grid');
+  const [selectedCategory, setSelectedCategory] = useState<MarketCategoryKey | null>(null);
 
   const fetchAgents = useCallback(async () => {
     try {
@@ -1186,7 +1250,7 @@ function CommunityAgentsSection({ token, onEnterHouse }: { token: string; onEnte
       });
       const data = await res.json().catch(() => ({}));
       if (res.ok && Array.isArray(data.agents)) {
-        setAgents(data.agents.filter((a: MarketAgent) => a.id !== 'official-agent'));
+        setAgents(data.agents);
       }
     } finally {
       setLoading(false);
@@ -1208,10 +1272,10 @@ function CommunityAgentsSection({ token, onEnterHouse }: { token: string; onEnte
     return grouped;
   }, [agents]);
 
-  const uncategorizedAgents = useMemo(
-    () => agents.filter((agent) => getAgentCategory(agent) === 'uncategorized'),
-    [agents]
-  );
+  const selectedCategoryMeta = selectedCategory
+    ? MARKET_CATEGORIES.find((category) => category.id === selectedCategory) || null
+    : null;
+  const selectedCategoryAgents = selectedCategory ? agentsByCategory.get(selectedCategory) || [] : [];
 
   const handleDownload = async (agent: MarketAgent) => {
     if (!agent.hasWorkspace) return;
@@ -1246,7 +1310,10 @@ function CommunityAgentsSection({ token, onEnterHouse }: { token: string; onEnte
               type="button"
               aria-label="平铺显示"
               title="平铺显示"
-              onClick={() => setDisplayMode('grid')}
+              onClick={() => {
+                setDisplayMode('grid');
+                setSelectedCategory(null);
+              }}
               className={`flex h-10 w-10 items-center justify-center border-2 border-pixel-black ${displayMode === 'grid' ? 'bg-pixel-yellow text-pixel-black' : 'bg-pixel-white text-pixel-black hover:bg-pixel-yellow/40'}`}
             >
               <svg viewBox="0 0 24 24" className="h-6 w-6" aria-hidden="true">
@@ -1257,7 +1324,10 @@ function CommunityAgentsSection({ token, onEnterHouse }: { token: string; onEnte
               type="button"
               aria-label="分类显示"
               title="分类显示"
-              onClick={() => setDisplayMode('category')}
+              onClick={() => {
+                setDisplayMode('category');
+                setSelectedCategory(null);
+              }}
               className={`flex h-10 w-10 items-center justify-center border-2 border-pixel-black ${displayMode === 'category' ? 'bg-pixel-yellow text-pixel-black' : 'bg-pixel-white text-pixel-black hover:bg-pixel-yellow/40'}`}
             >
               <svg viewBox="0 0 24 24" className="h-6 w-6" aria-hidden="true">
@@ -1290,90 +1360,100 @@ function CommunityAgentsSection({ token, onEnterHouse }: { token: string; onEnte
         </div>
       )}
 
-      {!loading && displayMode === 'category' && (
-        <div className="space-y-4">
+      {!loading && displayMode === 'category' && !selectedCategoryMeta && (
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-5">
           {MARKET_CATEGORIES.map((category, categoryIndex) => {
             const categoryAgents = agentsByCategory.get(category.id) || [];
             return (
-              <motion.section
+              <motion.button
                 key={category.id}
+                type="button"
                 initial={{ opacity: 0, y: 12 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: categoryIndex * 0.04 }}
-                className="border-[3px] border-pixel-black bg-pixel-white"
+                whileHover={{ y: -3 }}
+                onClick={() => setSelectedCategory(category.id)}
+                className="group flex min-h-[220px] flex-col border-[3px] border-pixel-black bg-pixel-white text-left transition-transform"
                 style={{ boxShadow: '3px 3px 0px 0px #101010' }}
               >
-                <div className={`flex flex-col gap-3 border-b-[3px] border-pixel-black p-3 md:flex-row md:items-center md:justify-between ${category.bg} text-pixel-white`}>
-                  <div className="flex min-w-0 items-center gap-3">
-                    <span className="flex h-11 w-11 shrink-0 items-center justify-center border-2 border-pixel-black bg-pixel-white">
-                      <img src={category.avatar} alt="" className="h-8 w-8 object-contain" style={{ imageRendering: 'pixelated' }} />
-                    </span>
-                    <div className="min-w-0">
-                      <h3 className="font-pixel text-xl font-bold leading-tight">{category.name}</h3>
-                      <p className="font-pixel text-xs leading-snug text-pixel-white/75">{category.description}</p>
-                    </div>
-                  </div>
-                  <div className="flex shrink-0 items-center gap-2">
-                    <span className="border-2 border-pixel-white/50 px-2 py-1 font-pixel text-[10px]">{category.eyebrow} · {categoryAgents.length}</span>
-                    {category.officialHouse && (
-                      <button
-                        type="button"
-                        onClick={() => onEnterHouse(category.officialHouse!)}
-                        className="border-2 border-pixel-black bg-pixel-white px-3 py-1.5 font-pixel text-[10px] font-bold text-pixel-black hover:bg-pixel-yellow"
-                      >
-                        官方模板
-                      </button>
-                    )}
-                  </div>
+                <div className={`flex items-center justify-between border-b-[3px] border-pixel-black p-3 ${CATEGORY_CARD_TONES[category.id]} text-pixel-white`}>
+                  <span className="font-pixel text-[10px] font-bold uppercase tracking-[0.12em]">{category.eyebrow}</span>
+                  <span className="border-2 border-pixel-white/50 px-2 py-0.5 font-pixel text-[10px]">{categoryAgents.length}</span>
                 </div>
-                <div className="p-3">
-                  {categoryAgents.length > 0 ? (
-                    <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-                      {categoryAgents.map((agent, i) => (
-                        <MarketAgentTile
-                          key={agent.id}
-                          agent={agent}
-                          index={i}
-                          downloading={downloading === agent.id}
-                          onDownload={(item) => void handleDownload(item)}
-                        />
-                      ))}
-                    </div>
-                  ) : (
-                    <p className="border-2 border-dashed border-pixel-black/20 p-4 text-center font-pixel text-xs text-pixel-black/45">
-                      这个村暂时还没有用户上传的 Agent。
-                    </p>
-                  )}
+                <div className="flex flex-1 flex-col p-4">
+                  <span className="mb-4 flex h-16 w-16 items-center justify-center border-2 border-pixel-black bg-pixel-black/5">
+                    <img src={category.avatar} alt="" className="h-12 w-12 object-contain" style={{ imageRendering: 'pixelated' }} />
+                  </span>
+                  <h3 className="font-pixel text-xl font-bold leading-tight text-pixel-black">{category.name}</h3>
+                  <p className="mt-2 line-clamp-3 font-pixel text-xs leading-snug text-pixel-black/55">{category.description}</p>
+                  <span className="mt-auto inline-flex items-center justify-between border-t-2 border-pixel-black/10 pt-3 font-pixel text-[11px] font-bold text-pixel-black">
+                    进入村庄
+                    <span aria-hidden="true" className="transition-transform group-hover:translate-x-1">→</span>
+                  </span>
                 </div>
-              </motion.section>
+              </motion.button>
             );
           })}
-          {uncategorizedAgents.length > 0 && (
-            <motion.section
-              initial={{ opacity: 0, y: 12 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: MARKET_CATEGORIES.length * 0.04 }}
-              className="border-[3px] border-dashed border-pixel-black/35 bg-pixel-white p-3"
-              style={{ boxShadow: '3px 3px 0px 0px #101010' }}
-            >
-              <div className="mb-3 flex items-center justify-between gap-3">
-                <p className="font-pixel text-base font-bold text-pixel-black">未归类 Agent</p>
-                <span className="border-2 border-pixel-black bg-pixel-gray px-2 py-1 font-pixel text-[10px] text-pixel-white">{uncategorizedAgents.length}</span>
-              </div>
-              <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-                {uncategorizedAgents.map((agent, i) => (
-                  <MarketAgentTile
-                    key={agent.id}
-                    agent={agent}
-                    index={i}
-                    downloading={downloading === agent.id}
-                    onDownload={(item) => void handleDownload(item)}
-                  />
-                ))}
-              </div>
-            </motion.section>
-          )}
         </div>
+      )}
+
+      {!loading && displayMode === 'category' && selectedCategoryMeta && (
+        <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className="space-y-3">
+          <button
+            type="button"
+            onClick={() => setSelectedCategory(null)}
+            className="border-[3px] border-pixel-black bg-pixel-white px-3 py-2 font-pixel text-xs font-bold text-pixel-black hover:bg-pixel-black/5"
+            style={{ boxShadow: '2px 2px 0px 0px #101010' }}
+          >
+            ← 返回村庄
+          </button>
+          <section className="border-[3px] border-pixel-black bg-pixel-white" style={{ boxShadow: '3px 3px 0px 0px #101010' }}>
+            <div className={`flex flex-col gap-3 border-b-[3px] border-pixel-black p-4 md:flex-row md:items-center md:justify-between ${CATEGORY_CARD_TONES[selectedCategoryMeta.id]} text-pixel-white`}>
+              <div className="flex min-w-0 items-center gap-3">
+                <span className="flex h-14 w-14 shrink-0 items-center justify-center border-2 border-pixel-black bg-pixel-white">
+                  <img src={selectedCategoryMeta.avatar} alt="" className="h-10 w-10 object-contain" style={{ imageRendering: 'pixelated' }} />
+                </span>
+                <div className="min-w-0">
+                  <h3 className="font-pixel text-2xl font-bold leading-tight">{selectedCategoryMeta.name}</h3>
+                  <p className="font-pixel text-xs leading-snug text-pixel-white/75">{selectedCategoryMeta.description}</p>
+                </div>
+              </div>
+              <div className="flex shrink-0 items-center gap-2">
+                <span className="border-2 border-pixel-white/50 px-2 py-1 font-pixel text-[10px]">
+                  {selectedCategoryMeta.eyebrow} · {selectedCategoryAgents.length}
+                </span>
+                {selectedCategoryMeta.officialHouse && (
+                  <button
+                    type="button"
+                    onClick={() => onEnterHouse(selectedCategoryMeta.officialHouse!)}
+                    className="border-2 border-pixel-black bg-pixel-white px-3 py-1.5 font-pixel text-[10px] font-bold text-pixel-black hover:bg-pixel-yellow"
+                  >
+                    官方模板
+                  </button>
+                )}
+              </div>
+            </div>
+            <div className="p-3">
+              {selectedCategoryAgents.length > 0 ? (
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+                  {selectedCategoryAgents.map((agent, i) => (
+                    <MarketAgentTile
+                      key={agent.id}
+                      agent={agent}
+                      index={i}
+                      downloading={downloading === agent.id}
+                      onDownload={(item) => void handleDownload(item)}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <p className="border-2 border-dashed border-pixel-black/20 p-8 text-center font-pixel text-xs text-pixel-black/45">
+                  这个村暂时还没有可召唤的 Agent。
+                </p>
+              )}
+            </div>
+          </section>
+        </motion.div>
       )}
     </motion.div>
   );
