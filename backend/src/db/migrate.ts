@@ -6,7 +6,9 @@ import fs from 'fs';
 import path from 'path';
 
 // Ensure data directory exists
-const dataDir = path.join(process.cwd(), 'data');
+const dataDir = process.env.BACKEND_DATA_DIR?.trim()
+  ? path.resolve(process.env.BACKEND_DATA_DIR.trim())
+  : path.join(process.cwd(), 'data');
 if (!fs.existsSync(dataDir)) {
   fs.mkdirSync(dataDir, { recursive: true });
 }

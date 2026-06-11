@@ -9,6 +9,11 @@ let db: ReturnType<typeof drizzle> | null = null;
 let sqliteDb: Database.Database | null = null;
 
 function getBackendDataDir(): string {
+  const configuredDir = process.env.BACKEND_DATA_DIR?.trim();
+  if (configuredDir) {
+    return path.resolve(configuredDir);
+  }
+
   // backend/src/db -> backend/data
   return path.resolve(__dirname, '../../data');
 }
@@ -123,7 +128,7 @@ function ensureAgentRuntimeDirectoryRows() {
 
 export function getDb() {
   if (!db) {
-    // Ensure data directory exists (fixed to backend/data)
+    // Ensure data directory exists
     const dataDir = getBackendDataDir();
     if (!fs.existsSync(dataDir)) {
       fs.mkdirSync(dataDir, { recursive: true });

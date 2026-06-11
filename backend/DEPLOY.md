@@ -156,6 +156,7 @@ sudo systemctl status openclaw-backend
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `WORKSPACE_ROOT` | `./data/workspaces` | Directory for agent workspaces |
+| `BACKEND_DATA_DIR` | `./data` | Directory for the SQLite database and backend-owned files. Use a shared path across release directories. |
 | `JWT_SECRET` | - | Secret key for JWT signing (REQUIRED) |
 | `PORT` | `3002` | REST API port |
 | `WS_PORT` | `3003` | WebSocket port |
@@ -167,6 +168,8 @@ sudo systemctl status openclaw-backend
 For the current IP-based deployment, set:
 
 ```bash
+BACKEND_DATA_DIR=/opt/openclaw/data/backend-data
+WORKSPACE_ROOT=/opt/openclaw/data/workspaces
 PUBLIC_BACKEND_URL=http://121.40.242.77
 FEISHU_PUBLIC_BASE_URL=http://121.40.242.77
 CORS_ORIGIN=http://121.40.242.77
