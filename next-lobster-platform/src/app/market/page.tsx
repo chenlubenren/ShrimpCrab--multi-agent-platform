@@ -493,20 +493,20 @@ function HouseAgentCard({
         <div className="min-w-0 flex-1 flex flex-col justify-between">
           <div>
             <div className="flex items-center gap-2">
-              <h4 className="truncate font-pixel text-base font-bold text-pixel-black">{agent.name}</h4>
+              <h4 className="truncate font-pixel text-xl font-bold text-pixel-black">{agent.name}</h4>
               <span
-                className={`shrink-0 px-1.5 py-0.5 font-pixel text-[10px] font-bold text-pixel-white ${agent.source === '官方' ? house.bg : 'bg-pixel-black/40'}`}
+                className={`shrink-0 px-2 py-1 font-pixel text-xs font-bold text-pixel-white ${agent.source === '官方' ? house.bg : 'bg-pixel-black/40'}`}
                 style={{ boxShadow: '1px 1px 0px 0px #101010' }}
               >
                 {agent.source}
               </span>
             </div>
-            <p className="mt-1 font-pixel text-xs leading-relaxed text-pixel-black/50">{agent.intro}</p>
+            <p className="mt-2 font-pixel text-sm leading-relaxed text-pixel-black/60">{agent.intro}</p>
             <div className="mt-1.5 flex items-center gap-2">
               {agent.scenario !== '无场景' && (
-                <span className="px-1.5 py-0.5 font-pixel text-[10px] border-[1.5px] border-pixel-black/15 text-pixel-black/40">{agent.scenario}</span>
+                <span className="border-[1.5px] border-pixel-black/15 px-2 py-1 font-pixel text-xs text-pixel-black/45">{agent.scenario}</span>
               )}
-              <span className="font-pixel text-[10px] text-pixel-black/30">
+              <span className="font-pixel text-xs text-pixel-black/40">
                 {agent.rating !== null ? `★ ${agent.rating.toFixed(1)}` : '☆ 暂无评分'}
               </span>
             </div>
@@ -517,7 +517,7 @@ function HouseAgentCard({
             <button
               type="button"
               onClick={onDetail}
-              className="border-[2px] border-pixel-black bg-pixel-white px-4 py-1.5 font-pixel text-[11px] font-bold text-pixel-black hover:bg-pixel-black/5 transition-colors"
+              className="border-[2px] border-pixel-black bg-pixel-white px-4 py-2 font-pixel text-sm font-bold text-pixel-black transition-colors hover:bg-pixel-black/5"
               style={{ boxShadow: '2px 2px 0px 0px #101010' }}
             >
               详情
@@ -525,7 +525,7 @@ function HouseAgentCard({
             <button
               type="button"
               onClick={onAdopt}
-              className={`border-[2px] border-pixel-black ${house.bg} px-4 py-1.5 font-pixel text-[11px] font-bold text-pixel-white hover:opacity-90 transition-opacity`}
+              className={`border-[2px] border-pixel-black ${house.bg} px-4 py-2 font-pixel text-sm font-bold text-pixel-white transition-opacity hover:opacity-90`}
               style={{ boxShadow: '2px 2px 0px 0px #101010' }}
             >
               领养 →
@@ -716,6 +716,60 @@ function TeamAvatarGrid({
   );
 }
 
+function TeamWorkflowCanvas({ template }: { template: TeamTemplateData }) {
+  const members = template.members.length > 0 ? template.members : [];
+  const resolveStageMember = (stage: string, index: number) => {
+    if (members.length === 0) return undefined;
+    const upperStage = stage.toUpperCase();
+    return members.find((member) => {
+      const roleTokens = member.roleCode.toUpperCase().split(/[^A-Z0-9]+/).filter((token) => token.length >= 2);
+      return roleTokens.some((token) => upperStage.includes(token));
+    }) || members[index % members.length];
+  };
+
+  return (
+    <div className="border-[3px] border-pixel-black bg-pixel-white p-3" style={{ boxShadow: '2px 2px 0px 0px rgba(16,16,16,0.16)' }}>
+      <div className="overflow-x-auto pb-2">
+        <div className="grid min-w-[760px] grid-cols-[repeat(var(--stage-count),minmax(150px,1fr))] items-start gap-3" style={{ ['--stage-count' as string]: template.workflow.stages.length }}>
+          {template.workflow.stages.map((stage, index) => {
+            const member = resolveStageMember(stage, index);
+            return (
+              <div key={`${stage}-${index}`} className="relative">
+                <div className="min-h-[150px] border-[3px] border-pixel-black bg-[#f8f6f1] p-3">
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                    <span className="border-2 border-pixel-black px-2 py-1 font-pixel text-sm font-bold text-pixel-white" style={{ background: template.color }}>
+                      {index + 1}
+                    </span>
+                    {member && (
+                      <span className="truncate font-pixel text-xs font-bold text-pixel-black/45">
+                        {member.roleCode}
+                      </span>
+                    )}
+                  </div>
+                  {member && (
+                    <div className="mb-2 flex items-center gap-2">
+                      <span className="flex h-9 w-9 shrink-0 items-center justify-center border-2 border-pixel-black bg-pixel-white">
+                        <img src={member.avatar || template.avatar} alt="" className="h-7 w-7 object-contain" style={{ imageRendering: 'pixelated' }} />
+                      </span>
+                      <span className="min-w-0 truncate font-pixel text-sm font-bold text-pixel-black">{member.name}</span>
+                    </div>
+                  )}
+                  <p className="font-pixel text-sm leading-snug text-pixel-black/70">{stage}</p>
+                </div>
+                {index < template.workflow.stages.length - 1 && (
+                  <span className="absolute -right-3 top-[72px] z-10 flex h-6 w-6 items-center justify-center border-2 border-pixel-black bg-pixel-yellow font-pixel text-sm font-bold text-pixel-black">
+                    →
+                  </span>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function TeamAdoptModal({
   template,
   onClose,
@@ -863,20 +917,24 @@ function TeamDetailModal({
   onClose: () => void;
   onAdopt: () => void;
 }) {
+  const [workflowOpen, setWorkflowOpen] = useState(false);
+
   return (
     <motion.div
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-[2px]"
+      className="fixed inset-0 z-[90] flex items-center justify-center bg-black/60 p-4 backdrop-blur-[2px]"
       onClick={onClose}
+      role="dialog"
+      aria-modal="true"
     >
       <motion.div
         initial={{ scale: 0.92, opacity: 0, y: 12 }}
         animate={{ scale: 1, opacity: 1, y: 0 }}
         exit={{ scale: 0.95, opacity: 0 }}
         transition={{ type: 'spring', damping: 22, stiffness: 280 }}
-        className="w-full max-w-[560px] max-h-[85vh] overflow-y-auto border-[3px] border-pixel-black bg-[#f8f6f1]"
+        className="grid max-h-[88dvh] w-full max-w-5xl grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden border-[3px] border-pixel-black bg-[#f8f6f1]"
         style={{ boxShadow: '4px 4px 0px 0px #101010' }}
         onClick={(e) => e.stopPropagation()}
       >
@@ -887,23 +945,23 @@ function TeamDetailModal({
           <div className="flex items-center gap-3">
             <TeamAvatarGrid members={template.members} fallback={template.avatar} className="h-14 w-14" />
             <div className="min-w-0">
-              <h2 className="truncate font-pixel text-xl font-bold text-pixel-white">{template.name}</h2>
-              <p className="mt-1 font-pixel text-xs text-pixel-white/80">
+              <h2 className="truncate font-pixel text-2xl font-bold text-pixel-white">{template.name}</h2>
+              <p className="mt-1 font-pixel text-sm text-pixel-white/80">
                 {template.category} · {template.memberCount} Agents · {template.platform.toUpperCase()}
               </p>
             </div>
           </div>
         </div>
 
-        <div className="p-5 space-y-5">
-          <p className="font-pixel text-sm text-pixel-black/70 leading-relaxed">
+        <div className="min-h-0 space-y-5 overflow-y-auto p-5">
+          <p className="font-pixel text-base leading-relaxed text-pixel-black/70">
             {template.description}
           </p>
 
           {/* Members */}
           <div>
-            <h3 className="font-pixel text-sm font-bold text-pixel-black mb-3">团队成员</h3>
-            <div className="space-y-3">
+            <h3 className="mb-3 font-pixel text-base font-bold text-pixel-black">团队成员</h3>
+            <div className="grid gap-3 md:grid-cols-2">
               {template.members.map((m) => (
                 <div
                   key={m.roleCode}
@@ -920,19 +978,19 @@ function TeamDetailModal({
                       />
                     </span>
                     <span className="min-w-0 flex-1">
-                      <span className="block truncate font-pixel text-sm font-bold text-pixel-black">{m.name}</span>
-                      <span className="block font-pixel text-[10px] text-pixel-black/40">{m.roleCode}</span>
+                      <span className="block truncate font-pixel text-base font-bold text-pixel-black">{m.name}</span>
+                      <span className="block font-pixel text-xs text-pixel-black/40">{m.roleCode}</span>
                     </span>
                   </div>
-                  <p className="font-pixel text-xs text-pixel-black/60 mb-2">{m.description}</p>
+                  <p className="mb-2 font-pixel text-sm leading-snug text-pixel-black/60">{m.description}</p>
                   <div className="flex flex-wrap gap-1">
                     {m.skills.slice(0, 4).map((s) => (
-                      <span key={s} className="px-1.5 py-0.5 font-pixel text-[10px] bg-pixel-black/5 text-pixel-black/50">
+                      <span key={s} className="bg-pixel-black/5 px-1.5 py-0.5 font-pixel text-xs text-pixel-black/50">
                         {s.split(' — ')[0]}
                       </span>
                     ))}
                     {m.skills.length > 4 && (
-                      <span className="px-1.5 py-0.5 font-pixel text-[10px] text-pixel-black/30">
+                      <span className="px-1.5 py-0.5 font-pixel text-xs text-pixel-black/30">
                         +{m.skills.length - 4} more
                       </span>
                     )}
@@ -944,18 +1002,30 @@ function TeamDetailModal({
 
           {/* Workflow */}
           <div>
-            <h3 className="font-pixel text-sm font-bold text-pixel-black mb-2">工作流程</h3>
-            <p className="font-pixel text-xs text-pixel-black/50 mb-2">{template.workflow.description}</p>
-            <div className="border-[2px] border-pixel-black bg-pixel-white p-3 space-y-1.5">
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+              <h3 className="font-pixel text-base font-bold text-pixel-black">工作流程</h3>
+              <button
+                type="button"
+                onClick={() => setWorkflowOpen((open) => !open)}
+                className="border-[2px] border-pixel-black bg-pixel-white px-3 py-1.5 font-pixel text-sm font-bold text-pixel-black hover:bg-pixel-yellow"
+                style={{ boxShadow: '2px 2px 0px 0px #101010' }}
+                aria-expanded={workflowOpen}
+              >
+                {workflowOpen ? '收起流程画布' : '展开流程画布'}
+              </button>
+            </div>
+            <p className="mb-3 font-pixel text-sm leading-snug text-pixel-black/55">{template.workflow.description}</p>
+            {workflowOpen && <TeamWorkflowCanvas template={template} />}
+            <div className="mt-3 space-y-2 border-[2px] border-pixel-black bg-pixel-white p-3">
               {template.workflow.stages.map((s, i) => (
                 <div key={i} className="flex items-start gap-2">
                   <span
-                    className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center border-2 border-pixel-black font-pixel text-[10px] font-bold text-pixel-white"
+                    className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center border-2 border-pixel-black font-pixel text-xs font-bold text-pixel-white"
                     style={{ background: template.color }}
                   >
                     {i + 1}
                   </span>
-                  <span className="font-pixel text-xs text-pixel-black/60">{s}</span>
+                  <span className="font-pixel text-sm leading-snug text-pixel-black/60">{s}</span>
                 </div>
               ))}
             </div>
@@ -963,18 +1033,18 @@ function TeamDetailModal({
 
           {/* Communication */}
           <div>
-            <h3 className="font-pixel text-sm font-bold text-pixel-black mb-2">
+            <h3 className="mb-2 font-pixel text-base font-bold text-pixel-black">
               沟通方式：{template.communication.mode}
             </h3>
-            <p className="font-pixel text-xs text-pixel-black/50 leading-relaxed">
+            <p className="font-pixel text-sm leading-relaxed text-pixel-black/55">
               {template.communication.description}
             </p>
           </div>
 
           {/* Isolation */}
           <div>
-            <h3 className="font-pixel text-sm font-bold text-pixel-black mb-2">隔离机制</h3>
-            <p className="font-pixel text-xs text-pixel-black/50 leading-relaxed">
+            <h3 className="mb-2 font-pixel text-base font-bold text-pixel-black">隔离机制</h3>
+            <p className="font-pixel text-sm leading-relaxed text-pixel-black/55">
               {template.isolation.description}
             </p>
           </div>
@@ -983,14 +1053,14 @@ function TeamDetailModal({
         <div className="flex items-center gap-2.5 border-t-[3px] border-pixel-black px-5 py-4 bg-pixel-black/[0.03]">
           <button
             onClick={onClose}
-            className="flex-1 border-[2px] border-pixel-black bg-pixel-white py-2 font-pixel text-xs font-bold text-pixel-black hover:bg-pixel-black/5 transition-colors"
+            className="flex-1 border-[2px] border-pixel-black bg-pixel-white py-2.5 font-pixel text-sm font-bold text-pixel-black transition-colors hover:bg-pixel-black/5"
             style={{ boxShadow: '2px 2px 0px 0px #101010' }}
           >
             关闭
           </button>
           <button
             onClick={() => { onClose(); onAdopt(); }}
-            className="flex-1 border-[2px] border-pixel-black py-2 font-pixel text-xs font-bold text-pixel-white hover:opacity-90 transition-opacity"
+            className="flex-1 border-[2px] border-pixel-black py-2.5 font-pixel text-sm font-bold text-pixel-white transition-opacity hover:opacity-90"
             style={{ background: template.color, boxShadow: '2px 2px 0px 0px #101010' }}
           >
             一键领养团队 →
@@ -1078,8 +1148,8 @@ function TeamHouseDetailPage({ onBack }: { onBack?: () => void }) {
                 <div className="flex items-center gap-3">
                   <TeamAvatarGrid members={tpl.members} fallback={tpl.avatar} className="h-12 w-12" />
                   <div>
-                    <h4 className="font-pixel text-base font-bold text-pixel-white">{tpl.name}</h4>
-                    <p className="font-pixel text-[10px] text-pixel-white/70 uppercase tracking-wider">
+                    <h4 className="font-pixel text-xl font-bold text-pixel-white">{tpl.name}</h4>
+                    <p className="font-pixel text-sm text-pixel-white/75 uppercase">
                       {tpl.memberCount} AGENTS · {tpl.platform} · {tpl.category}
                     </p>
                   </div>
@@ -1088,26 +1158,26 @@ function TeamHouseDetailPage({ onBack }: { onBack?: () => void }) {
 
               <div className="p-4">
                 {/* Description */}
-                <p className="font-pixel text-xs leading-relaxed text-pixel-black/60 mb-3">
+                <p className="mb-4 font-pixel text-sm leading-relaxed text-pixel-black/65">
                   {tpl.description}
                 </p>
 
                 {/* Member previews */}
-                <div className="grid grid-cols-2 gap-1.5 mb-3">
+                <div className="mb-4 grid grid-cols-2 gap-2">
                   {tpl.members.map((m) => (
                     <div
                       key={m.roleCode}
-                      className="flex items-center gap-1.5 border-[1.5px] border-pixel-black/10 px-2 py-1.5"
+                      className="flex items-center gap-2 border-[1.5px] border-pixel-black/10 px-2 py-2"
                     >
-                      <span className="flex h-7 w-7 shrink-0 items-center justify-center border border-pixel-black/20 bg-pixel-white">
+                      <span className="flex h-8 w-8 shrink-0 items-center justify-center border border-pixel-black/20 bg-pixel-white">
                         <img
                           src={m.avatar || tpl.avatar}
                           alt=""
-                          className="h-5 w-5 object-contain"
+                          className="h-6 w-6 object-contain"
                           style={{ imageRendering: 'pixelated' }}
                         />
                       </span>
-                      <span className="font-pixel text-[10px] text-pixel-black/60 truncate">
+                      <span className="truncate font-pixel text-sm text-pixel-black/60">
                         {m.name}
                       </span>
                     </div>
@@ -1115,9 +1185,9 @@ function TeamHouseDetailPage({ onBack }: { onBack?: () => void }) {
                 </div>
 
                 {/* Tags */}
-                <div className="flex flex-wrap gap-1 mb-3">
+                <div className="mb-4 flex flex-wrap gap-1.5">
                   {tpl.tags.slice(0, 5).map((tag) => (
-                    <span key={tag} className="px-2 py-0.5 font-pixel text-[10px] bg-pixel-black/5 text-pixel-black/40">
+                    <span key={tag} className="bg-pixel-black/5 px-2 py-1 font-pixel text-xs text-pixel-black/45">
                       #{tag}
                     </span>
                   ))}
@@ -1128,7 +1198,7 @@ function TeamHouseDetailPage({ onBack }: { onBack?: () => void }) {
                   <button
                     type="button"
                     onClick={() => setDetailTemplate(tpl)}
-                    className="border-[2px] border-pixel-black bg-pixel-white px-4 py-1.5 font-pixel text-[11px] font-bold text-pixel-black hover:bg-pixel-black/5 transition-colors"
+                    className="border-[2px] border-pixel-black bg-pixel-white px-4 py-2 font-pixel text-sm font-bold text-pixel-black transition-colors hover:bg-pixel-black/5"
                     style={{ boxShadow: '2px 2px 0px 0px #101010' }}
                   >
                     详情
@@ -1136,7 +1206,7 @@ function TeamHouseDetailPage({ onBack }: { onBack?: () => void }) {
                   <button
                     type="button"
                     onClick={() => setAdoptingTemplate(tpl)}
-                    className="border-[2px] border-pixel-black px-4 py-1.5 font-pixel text-[11px] font-bold text-pixel-white hover:opacity-90 transition-opacity"
+                    className="border-[2px] border-pixel-black px-4 py-2 font-pixel text-sm font-bold text-pixel-white transition-opacity hover:opacity-90"
                     style={{ background: tpl.color, boxShadow: '2px 2px 0px 0px #101010' }}
                   >
                     一键领养 →
@@ -1204,38 +1274,38 @@ function MarketAgentTile({
       animate={{ opacity: 1, y: 0 }}
       transition={{ delay: 0.04 + index * 0.03 }}
       whileHover={{ y: -2 }}
-      className="flex min-h-[168px] flex-col border-[3px] border-pixel-black bg-pixel-white p-3"
+      className="flex min-h-[220px] flex-col border-[3px] border-pixel-black bg-pixel-white p-4"
       style={{ boxShadow: '3px 3px 0px 0px #101010' }}
     >
-      <div className="flex gap-3">
-        <div className="flex h-12 w-12 shrink-0 items-center justify-center border-2 border-pixel-black bg-pixel-black/5">
+      <div className="flex gap-4">
+        <div className="flex h-16 w-16 shrink-0 items-center justify-center border-2 border-pixel-black bg-pixel-black/5">
           <img
             src={getMarketAvatar(agent)}
             alt={agent.name}
-            className="h-10 w-10 object-contain"
+            className="h-12 w-12 object-contain"
             style={{ imageRendering: 'pixelated' }}
             onError={(e) => { e.currentTarget.src = '/lobsters/lobster-004.png'; }}
           />
         </div>
         <div className="min-w-0 flex-1">
-          <h4 className="truncate font-pixel text-base font-bold text-pixel-black">{agent.name}</h4>
-          <p className="mt-0.5 line-clamp-2 font-pixel text-xs leading-snug text-pixel-black/55">{agent.description}</p>
+          <h4 className="truncate font-pixel text-xl font-bold text-pixel-black">{agent.name}</h4>
+          <p className="mt-1 line-clamp-3 font-pixel text-sm leading-snug text-pixel-black/60">{agent.description}</p>
         </div>
       </div>
-      <div className="mt-3 flex flex-wrap gap-1">
+      <div className="mt-4 flex flex-wrap gap-1.5">
         {(agent.tags || []).slice(0, 4).map((tag) => (
-          <span key={tag} className="border border-pixel-black/20 bg-pixel-black/5 px-1.5 py-0.5 font-pixel text-[10px] text-pixel-black/55">
+          <span key={tag} className="border border-pixel-black/20 bg-pixel-black/5 px-2 py-1 font-pixel text-xs text-pixel-black/55">
             #{tag.replace(/^platform:/, '')}
           </span>
         ))}
       </div>
-      <div className="mt-auto flex items-center justify-between border-t-2 border-pixel-black/10 pt-2">
-        <span className="font-pixel text-[10px] text-pixel-black/45">召唤 {agent.downloadCount}</span>
+      <div className="mt-auto flex items-center justify-between border-t-2 border-pixel-black/10 pt-3">
+        <span className="font-pixel text-sm text-pixel-black/45">召唤 {agent.downloadCount}</span>
         <button
           type="button"
           onClick={() => onDownload(agent)}
           disabled={downloading || !agent.hasWorkspace}
-          className="border-2 border-pixel-black bg-pixel-black px-3 py-1 font-pixel text-[10px] font-bold text-pixel-white disabled:opacity-50 hover:bg-pixel-black/80"
+          className="border-2 border-pixel-black bg-pixel-black px-4 py-2 font-pixel text-sm font-bold text-pixel-white hover:bg-pixel-black/80 disabled:opacity-50"
         >
           {downloading ? '...' : '召唤'}
         </button>
@@ -1385,16 +1455,16 @@ function CommunityAgentsSection({ token, onEnterHouse }: { token: string; onEnte
                 style={{ boxShadow: '6px 6px 0px 0px #101010' }}
               >
                 <div className={`flex items-center justify-between border-b-[3px] border-pixel-black p-3 ${CATEGORY_CARD_TONES[category.id]} text-pixel-white`}>
-                  <span className="font-pixel text-[10px] font-bold uppercase tracking-[0.12em]">{category.eyebrow}</span>
-                  <span className="border-2 border-pixel-white/50 px-2 py-0.5 font-pixel text-[10px]">{categoryAgents.length}</span>
+                  <span className="font-pixel text-xs font-bold uppercase">{category.eyebrow}</span>
+                  <span className="border-2 border-pixel-white/50 px-2 py-1 font-pixel text-xs">{categoryAgents.length}</span>
                 </div>
                 <div className="flex flex-1 flex-col p-4">
                   <span className="mb-4 flex h-16 w-16 items-center justify-center border-2 border-pixel-black bg-pixel-black/5">
                     <img src={category.avatar} alt="" className="h-12 w-12 object-contain" style={{ imageRendering: 'pixelated' }} />
                   </span>
                   <h3 className="font-pixel text-xl font-bold leading-tight text-pixel-black">{category.name}</h3>
-                  <p className="mt-2 line-clamp-3 font-pixel text-xs leading-snug text-pixel-black/55">{category.description}</p>
-                  <span className="mt-auto inline-flex items-center justify-between border-t-2 border-pixel-black/10 pt-3 font-pixel text-[11px] font-bold text-pixel-black">
+                  <p className="mt-2 line-clamp-3 font-pixel text-sm leading-snug text-pixel-black/60">{category.description}</p>
+                  <span className="mt-auto inline-flex items-center justify-between border-t-2 border-pixel-black/10 pt-3 font-pixel text-sm font-bold text-pixel-black">
                     进入村庄
                     <span aria-hidden="true" className="transition-transform group-hover:translate-x-1">→</span>
                   </span>
@@ -1410,7 +1480,7 @@ function CommunityAgentsSection({ token, onEnterHouse }: { token: string; onEnte
           <button
             type="button"
             onClick={() => setSelectedCategory(null)}
-            className="border-[3px] border-pixel-black bg-pixel-white px-3 py-2 font-pixel text-xs font-bold text-pixel-black hover:bg-pixel-black/5"
+            className="border-[3px] border-pixel-black bg-pixel-white px-3 py-2 font-pixel text-sm font-bold text-pixel-black hover:bg-pixel-black/5"
             style={{ boxShadow: '2px 2px 0px 0px #101010' }}
           >
             ← 返回村庄
@@ -1423,18 +1493,18 @@ function CommunityAgentsSection({ token, onEnterHouse }: { token: string; onEnte
                 </span>
                 <div className="min-w-0">
                   <h3 className="font-pixel text-2xl font-bold leading-tight">{selectedCategoryMeta.name}</h3>
-                  <p className="font-pixel text-xs leading-snug text-pixel-white/75">{selectedCategoryMeta.description}</p>
+                  <p className="font-pixel text-sm leading-snug text-pixel-white/75">{selectedCategoryMeta.description}</p>
                 </div>
               </div>
               <div className="flex shrink-0 items-center gap-2">
-                <span className="border-2 border-pixel-white/50 px-2 py-1 font-pixel text-[10px]">
+                <span className="border-2 border-pixel-white/50 px-2 py-1 font-pixel text-xs">
                   {selectedCategoryMeta.eyebrow} · {selectedCategoryAgents.length}
                 </span>
                 {selectedCategoryMeta.officialHouse && (
                   <button
                     type="button"
                     onClick={() => onEnterHouse(selectedCategoryMeta.officialHouse!)}
-                    className="border-2 border-pixel-black bg-pixel-white px-3 py-1.5 font-pixel text-[10px] font-bold text-pixel-black hover:bg-pixel-yellow"
+                    className="border-2 border-pixel-black bg-pixel-white px-3 py-2 font-pixel text-sm font-bold text-pixel-black hover:bg-pixel-yellow"
                   >
                     官方模板
                   </button>
@@ -1455,7 +1525,7 @@ function CommunityAgentsSection({ token, onEnterHouse }: { token: string; onEnte
                   ))}
                 </div>
               ) : (
-                <p className="border-2 border-dashed border-pixel-black/20 p-8 text-center font-pixel text-xs text-pixel-black/45">
+                <p className="border-2 border-dashed border-pixel-black/20 p-8 text-center font-pixel text-sm text-pixel-black/45">
                   这个村暂时还没有可召唤的 Agent。
                 </p>
               )}
