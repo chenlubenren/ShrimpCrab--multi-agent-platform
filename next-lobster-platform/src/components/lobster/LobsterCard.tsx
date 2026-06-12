@@ -209,7 +209,7 @@ export function LobsterCard({
                 onClick={handleEditProfile}
                 disabled={busyAction !== null}
               >
-                更改 agent 形象与介绍
+                配置 Agent / 供应商
               </button>
               <button
                 type="button"

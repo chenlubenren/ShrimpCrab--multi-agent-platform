@@ -12,6 +12,7 @@ import { deleteProjectFile, fetchProjectDeliverables, fetchProjectExecutions, fe
 import { API_BASE } from '@/lib/runtime';
 import { useOpenClawDesktopBridge } from '@/lib/desktop';
 import { buildWorkflowDslFromCanvas } from '@/lib/workflowDsl';
+import { hasConfiguredProvider } from '@/lib/agentProvider';
 import { useStore } from '@/store/useStore';
 import { useAuthStore } from '@/store/useAuthStore';
 import { useWorkflowEvents } from '@/hooks/useWorkflowEvents';
@@ -991,11 +992,30 @@ function TeamManagementCard({
   onViewComposition: () => void;
   onConfigureAgent: (agent: Lobster) => void;
 }) {
+  const [agentMenuOpenId, setAgentMenuOpenId] = useState<string | null>(null);
   const modeOptions: Array<{ mode: ProjectMode; label: string; count: number }> = [
     { mode: 'agent', label: '单 Agent', count: agents.length },
     { mode: 'team', label: '多 Agent', count: teams.length },
   ];
   const selectedAgent = agents.find((agent) => agent.id === activeAgentId) || agents[0] || null;
+
+  useEffect(() => {
+    if (!agentMenuOpenId) return;
+    const closeMenu = () => setAgentMenuOpenId(null);
+    document.addEventListener('click', closeMenu);
+    return () => document.removeEventListener('click', closeMenu);
+  }, [agentMenuOpenId]);
+
+  useEffect(() => {
+    if (agentMenuOpenId && !agents.some((agent) => agent.id === agentMenuOpenId)) {
+      setAgentMenuOpenId(null);
+    }
+  }, [agentMenuOpenId, agents]);
+
+  const openAgentConfig = (agent: Lobster) => {
+    setAgentMenuOpenId(null);
+    onConfigureAgent(agent);
+  };
 
   return (
     <div className="border-2 border-pixel-black bg-pixel-white p-3" style={{ boxShadow: '4px 4px 0 #101010' }}>
@@ -1089,6 +1109,74 @@ function TeamManagementCard({
           </button>
         )}
       </div>
+      {activeMode === 'agent' && (
+        <div className="mt-3 border-2 border-pixel-black bg-pixel-white">
+          <div className="border-b-2 border-pixel-black bg-pixel-yellow px-2 py-1 font-pixel text-xs font-bold text-pixel-black">
+            项目 Agent
+          </div>
+          <div className="max-h-48 overflow-y-auto p-2">
+            {agents.length === 0 ? (
+              <p className="px-2 py-3 font-pixel text-xs text-pixel-black/55">未绑定 Agent</p>
+            ) : (
+              agents.map((agent) => {
+                const active = agent.id === selectedAgent?.id;
+                const configured = hasConfiguredProvider(agent);
+                const menuOpen = agentMenuOpenId === agent.id;
+                return (
+                  <div
+                    key={agent.id}
+                    className={`group/agent-row relative mb-2 flex min-h-[46px] items-center gap-2 border-2 border-pixel-black ${active ? 'bg-pixel-yellow' : 'bg-pixel-white hover:bg-pixel-yellow/40'}`}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => onAgentChange(agent.id)}
+                      className="min-w-0 flex-1 px-2 py-2 text-left font-pixel text-xs text-pixel-black"
+                    >
+                      <span className="block truncate font-bold">{agent.name}</span>
+                      <span className={`mt-1 block truncate text-[10px] ${configured ? 'text-pixel-green' : 'text-pixel-black/45'}`}>
+                        {configured ? '已配置供应商' : '未配置供应商'}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={`配置 ${agent.name}`}
+                      className={`mr-1 h-8 w-8 shrink-0 border-2 border-pixel-black bg-pixel-white font-pixel text-lg leading-none text-pixel-black transition-opacity hover:bg-pixel-yellow focus:opacity-100 ${menuOpen ? 'opacity-100' : 'opacity-0 group-hover/agent-row:opacity-100 group-focus-within/agent-row:opacity-100'}`}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        setAgentMenuOpenId((current) => current === agent.id ? null : agent.id);
+                      }}
+                    >
+                      ...
+                    </button>
+                    {menuOpen && (
+                      <div
+                        className="absolute right-1 top-10 z-40 w-44 border-2 border-pixel-black bg-pixel-white py-1"
+                        style={{ boxShadow: '3px 3px 0 #101010' }}
+                        onClick={(event) => event.stopPropagation()}
+                      >
+                        <button
+                          type="button"
+                          className="w-full px-3 py-2 text-left font-pixel text-xs text-pixel-black hover:bg-pixel-yellow"
+                          onClick={() => openAgentConfig(agent)}
+                        >
+                          配置 Agent / 供应商
+                        </button>
+                        <Link
+                          href={`/agent/${agent.id}`}
+                          className="block w-full px-3 py-2 text-left font-pixel text-xs text-pixel-black hover:bg-pixel-yellow"
+                          onClick={() => setAgentMenuOpenId(null)}
+                        >
+                          打开 Agent
+                        </Link>
+                      </div>
+                    )}
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
