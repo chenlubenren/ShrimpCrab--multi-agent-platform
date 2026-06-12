@@ -600,6 +600,9 @@ class WorkflowExecutorService extends EventEmitter {
             stateDir: workflowStateDir,
           }
       : undefined;
+    if (platform === 'openclaw') {
+      this.seedWorkflowOpenClawState(agent, workflowStateDir);
+    }
     const runtimePrompt = buildAgentRuntimePrompt(agent, {
       userMessage: task,
       mode: 'workflow',
@@ -636,6 +639,34 @@ class WorkflowExecutorService extends EventEmitter {
       workflowProviderConfig,
       Math.max(1, Math.floor(runtime.dsl.execution.timeoutSec || 1800)) * 1000
     );
+  }
+
+  private seedWorkflowOpenClawState(agent: UserAgentInstance, workflowStateDir: string): void {
+    const sourceStateDirs = [
+      agent.stateDir ? resolveStoredPath(agent.stateDir) : '',
+      path.join(resolveStoredPath(agent.workspacePath), '.openclaw'),
+    ].filter((value, index, all): value is string =>
+      Boolean(value) && all.indexOf(value) === index
+    );
+
+    for (const sourceStateDir of sourceStateDirs) {
+      if (!fs.existsSync(sourceStateDir)) continue;
+      if (path.resolve(sourceStateDir) === path.resolve(workflowStateDir)) continue;
+      this.copyOpenClawStateFile(sourceStateDir, workflowStateDir, 'openclaw.json');
+      this.copyOpenClawStateFile(
+        sourceStateDir,
+        workflowStateDir,
+        path.join('agents', 'main', 'agent', 'auth-profiles.json')
+      );
+    }
+  }
+
+  private copyOpenClawStateFile(sourceStateDir: string, targetStateDir: string, relativePath: string): void {
+    const sourcePath = path.join(sourceStateDir, relativePath);
+    if (!fs.existsSync(sourcePath)) return;
+    const targetPath = path.join(targetStateDir, relativePath);
+    fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+    fs.copyFileSync(sourcePath, targetPath);
   }
 
   private writeFallbackHandoff(

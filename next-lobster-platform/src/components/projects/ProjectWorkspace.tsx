@@ -180,7 +180,8 @@ export function ProjectWorkspace({
     fetchProjectExecutions(project.id).then((executions) => {
       if (cancelled || executions.length === 0) return;
       const latest = executions[0];
-      setLatestExecution(latest as unknown as WorkflowExecution);
+      const latestExecution = latest as unknown as WorkflowExecution;
+      setLatestExecution(latestExecution);
 
       const teamKey = latest.architectureId
         ? `team:${latest.architectureId}`
@@ -201,9 +202,11 @@ export function ProjectWorkspace({
         seenEventIdsRef.current.add(evt.id);
         const nodeState = evt.nodeId ? latest.nodeStates?.[evt.nodeId] : undefined;
         if (nodeState && nodeState.type !== 'agent') continue;
+        const output = typeof evt.details?.output === 'string' ? evt.details.output : nodeState?.output;
+        const dryRunCompleted = evt.type === 'node_completed' && isDryRunOutputText(output);
         historyMessages.push({
           id: evt.id,
-          role: evt.type === 'node_failed' ? 'error' : 'assistant',
+          role: evt.type === 'node_failed' || dryRunCompleted ? 'error' : 'assistant',
           content: nodeState
             ? buildNodeReportContent(evt, nodeState)
             : evt.message,
@@ -215,8 +218,12 @@ export function ProjectWorkspace({
       if (latest.finalOutput) {
         historyMessages.push({
           id: `hist-final-${latest.id}`,
-          role: 'assistant',
-          content: latest.finalOutput,
+          role: latestExecution.status === 'failed' ||
+            executionHasLlmFailureOutput(latestExecution) ||
+            executionHasDryRunOutput(latestExecution)
+            ? 'error'
+            : 'assistant',
+          content: buildExecutionReply(latestExecution),
           timestamp: latest.completedAt || latest.updatedAt || latest.createdAt,
           agentName: latest.workflowName,
         });
@@ -325,10 +332,12 @@ export function ProjectWorkspace({
     if (evt.type === 'node_completed' || evt.type === 'node_failed') {
       const nodeState = delta.nodeStates.find((state) => state.nodeId === evt.nodeId);
       if (nodeState && nodeState.type === 'agent') {
+        const output = typeof evt.details?.output === 'string' ? evt.details.output : '';
+        const dryRunCompleted = evt.type === 'node_completed' && isDryRunOutputText(output);
         seenEventIdsRef.current.add(evt.id);
         appendWorkflowReport(teamKey, delta.executionId, {
           id: evt.id,
-          role: evt.type === 'node_failed' ? 'error' : 'assistant',
+          role: evt.type === 'node_failed' || dryRunCompleted ? 'error' : 'assistant',
           content: buildNodeReportContent(evt, nodeState),
           timestamp: evt.timestamp,
           agentName: evt.agentName || nodeState.label,
@@ -343,14 +352,17 @@ export function ProjectWorkspace({
       activePollingExecutionRef.current !== delta.executionId
     ) {
       seenEventIdsRef.current.add(evt.id);
-      const content = evt.type === 'execution_completed'
+      const dryRunCompleted = evt.type === 'execution_completed' && isDryRunOutputText(delta.finalOutput);
+      const content = dryRunCompleted
+        ? buildDryRunFailureMessage(delta.finalOutput)
+        : evt.type === 'execution_completed'
         ? shortText(delta.finalOutput || '团队任务执行完成。', 1800)
         : evt.type === 'execution_cancelled'
           ? '执行已取消。'
           : delta.error || '执行失败。';
       appendWorkflowReport(teamKey, delta.executionId, {
         id: evt.id,
-        role: evt.type === 'execution_failed' ? 'error' : 'assistant',
+        role: evt.type === 'execution_failed' || dryRunCompleted ? 'error' : 'assistant',
         content,
         timestamp: evt.timestamp,
         agentName: delta.workflowName,
@@ -529,7 +541,7 @@ export function ProjectWorkspace({
           await sleep(getWorkflowPollRetryDelay(consecutivePollErrors));
         }
       }
-      const replyRole: ChatRole = current.status === 'failed' || executionHasLlmFailureOutput(current)
+      const replyRole: ChatRole = current.status === 'failed' || executionHasLlmFailureOutput(current) || executionHasDryRunOutput(current)
         ? 'error'
         : TERMINAL_STATUSES.includes(current.status)
           ? 'assistant'
@@ -1335,6 +1347,15 @@ function buildExecutionReply(execution: WorkflowExecution): string {
   if (executionHasLlmFailureOutput(execution)) {
     return execution.error || 'LLM 请求失败：当前绑定的供应商/模型没有返回可用结果，请检查供应商状态、模型和 API 地址后重试。';
   }
+  if (executionHasDryRunOutput(execution)) {
+    return buildDryRunFailureMessage(
+      execution.finalOutput ||
+        Object.values(execution.nodeStates)
+          .map((state) => state.output || '')
+          .filter(Boolean)
+          .join('\n')
+    );
+  }
   if (execution.status === 'queued' || execution.status === 'running') {
     return '团队任务仍在执行中。请保持页面打开，或稍后刷新项目查看最新进度。';
   }
@@ -1358,6 +1379,30 @@ function isLlmFailureText(value?: string | null): boolean {
 function executionHasLlmFailureOutput(execution: WorkflowExecution): boolean {
   if (isLlmFailureText(execution.finalOutput)) return true;
   return Object.values(execution.nodeStates).some((state) => isLlmFailureText(state.output));
+}
+
+function isDryRunOutputText(value?: string | null): boolean {
+  const normalized = (value || '').replace(/\s+/g, ' ').trim();
+  return /\bdry-run completed\b/i.test(normalized) ||
+    /\bCLI unavailable fallback handoff\b/i.test(normalized) ||
+    /ProviderAuthError:\s*No API key found/i.test(normalized) ||
+    /No API key found for provider/i.test(normalized) ||
+    /未能真正执行/.test(normalized);
+}
+
+function executionHasDryRunOutput(execution: WorkflowExecution): boolean {
+  if (isDryRunOutputText(execution.finalOutput)) return true;
+  return Object.values(execution.nodeStates).some((state) => isDryRunOutputText(state.output));
+}
+
+function buildDryRunFailureMessage(output?: string | null): string {
+  const preview = output?.trim()
+    ? `\n\n返回片段：\n${shortText(output.trim(), 900)}`
+    : '';
+  return [
+    '本次团队执行只返回了 dry-run/降级模拟结果，未真实调用 Agent，也没有生成有效交付物。',
+    '请检查后端是否已部署最新修复，并确认团队内每个 Agent 都绑定了可用供应商/API Key 后重试。',
+  ].join('\n') + preview;
 }
 
 function getProjectIntro(project: Project): string {
@@ -1523,7 +1568,16 @@ function buildNodeReportContent(
   }
   const duration = formatDuration(state.startedAt, state.completedAt);
   const header = duration ? `已完成任务（耗时 ${duration}）` : '已完成任务';
-  const output = typeof evt.details?.output === 'string' ? shortText(evt.details.output, 600) : '';
+  const rawOutput = typeof evt.details?.output === 'string' ? evt.details.output : '';
+  if (isDryRunOutputText(rawOutput)) {
+    return [
+      '未真正执行：该节点返回了 dry-run/降级模拟结果。',
+      '请检查后端版本和 Agent 供应商/API Key 配置后重试。',
+      '',
+      shortText(rawOutput, 900),
+    ].join('\n');
+  }
+  const output = rawOutput ? shortText(rawOutput, 600) : '';
   const rawArtifacts = evt.details?.artifacts;
   const artifacts = Array.isArray(rawArtifacts)
     ? (rawArtifacts as Array<{ relativePath?: string; path?: string }>)
