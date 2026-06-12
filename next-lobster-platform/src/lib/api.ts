@@ -1,4 +1,4 @@
-import { Lobster, Architecture, Message, Conversation, Deliverable, WorkflowDsl, WorkflowExecution, SessionMessage, WhiteboardNote, Project, ProjectInput, ProjectFileContent, ProjectFileTree, RuntimeHealth } from '@/types';
+import { Lobster, Architecture, Message, Conversation, Deliverable, WorkflowDsl, WorkflowExecution, SessionMessage, WhiteboardNote, Project, ProjectInput, ProjectFileContent, ProjectFileNode, ProjectFileTree, RuntimeHealth } from '@/types';
 import { API_BASE } from '@/lib/runtime';
 
 export type FeishuIntegrationScope = 'agent' | 'team';
@@ -641,6 +641,38 @@ export async function fetchProjectFileContent(projectId: string, relativePath: s
     throw new Error(payload.message || '读取文件内容失败');
   }
   return payload.file;
+}
+
+export async function renameProjectFile(projectId: string, relativePath: string, name: string): Promise<ProjectFileNode> {
+  const res = await fetch(`${API_BASE}/api/projects/${encodeURIComponent(projectId)}/files`, {
+    method: 'PATCH',
+    headers: {
+      ...getAuthHeaders(),
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ path: relativePath, name }),
+  });
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(payload.message || '重命名文件失败');
+  }
+  return payload.file;
+}
+
+export async function deleteProjectFile(projectId: string, relativePath: string): Promise<{ success: boolean }> {
+  const res = await fetch(`${API_BASE}/api/projects/${encodeURIComponent(projectId)}/files`, {
+    method: 'DELETE',
+    headers: {
+      ...getAuthHeaders(),
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ path: relativePath }),
+  });
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(payload.message || '删除文件失败');
+  }
+  return payload;
 }
 
 // ==================== Runtime Health API ====================

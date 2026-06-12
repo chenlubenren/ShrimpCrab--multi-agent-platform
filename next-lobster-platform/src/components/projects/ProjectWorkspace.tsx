@@ -5,9 +5,10 @@ import type { KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerE
 import Link from 'next/link';
 import { ArchitectureInfo } from '@/components/architecture/ArchitectureInfo';
 import { NodeFlowPreview } from '@/components/architecture/NodeFlowPreview';
+import { AgentConfigModal } from '@/components/agent/AgentConfigModal';
 import { PixelButton } from '@/components/ui/PixelButton';
 import { PixelInput } from '@/components/ui/PixelInput';
-import { fetchProjectDeliverables, fetchProjectExecutions, fetchProjectFileContent, fetchProjectFiles, fetchWorkflowExecution, reviewProjectDeliverable, startWorkflowExecution } from '@/lib/api';
+import { deleteProjectFile, fetchProjectDeliverables, fetchProjectExecutions, fetchProjectFileContent, fetchProjectFiles, fetchWorkflowExecution, renameProjectFile, reviewProjectDeliverable, startWorkflowExecution } from '@/lib/api';
 import { API_BASE } from '@/lib/runtime';
 import { useOpenClawDesktopBridge } from '@/lib/desktop';
 import { buildWorkflowDslFromCanvas } from '@/lib/workflowDsl';
@@ -98,6 +99,7 @@ export function ProjectWorkspace({
   const [bindingAgentIds, setBindingAgentIds] = useState<string[]>(boundAgentIds);
   const [bindingSaving, setBindingSaving] = useState(false);
   const [bindingMessage, setBindingMessage] = useState('');
+  const [configAgent, setConfigAgent] = useState<Lobster | null>(null);
   const [sessionsByTeamId, setSessionsByTeamId] = useState<Record<string, ProjectSession[]>>({});
   const [activeSessionIdByTeamId, setActiveSessionIdByTeamId] = useState<Record<string, string>>({});
   const [hoveredSessionId, setHoveredSessionId] = useState<string | null>(null);
@@ -581,6 +583,7 @@ export function ProjectWorkspace({
             onAgentChange={setActiveAgentId}
             onBindTargets={openTeamBinding}
             onViewComposition={() => setTeamModalOpen(true)}
+            onConfigureAgent={(agent) => setConfigAgent(agent)}
           />
         </div>
       </div>
@@ -593,6 +596,13 @@ export function ProjectWorkspace({
           onCollapsedChange={setFileCollapsed}
           onWidthChange={setFilePanelWidth}
           onOpenFile={(relativePath) => void openFilePreview(relativePath)}
+          onFileDeleted={(relativePath) => {
+            setPreview((current) => current?.path === relativePath ? null : current);
+          }}
+          onFileRenamed={(fromPath, toPath) => {
+            setPreview((current) => current?.path === fromPath ? null : current);
+            if (preview?.path === fromPath) void openFilePreview(toPath);
+          }}
         />
 
         <div className="min-h-0 min-w-0 flex-1 border-t-4 border-pixel-black bg-pixel-white lg:border-l-4 lg:border-t-0">
@@ -721,6 +731,16 @@ export function ProjectWorkspace({
           onClose={() => setTeamModalOpen(false)}
         />
       )}
+      {configAgent && (
+        <AgentConfigModal
+          agent={configAgent}
+          onClose={() => setConfigAgent(null)}
+          onSave={() => {
+            setConfigAgent(null);
+            void fetchAgents();
+          }}
+        />
+      )}
     </section>
   );
 }
@@ -732,6 +752,8 @@ function ProjectFilePanel({
   onCollapsedChange,
   onWidthChange,
   onOpenFile,
+  onFileDeleted,
+  onFileRenamed,
 }: {
   project: Project;
   collapsed: boolean;
@@ -739,6 +761,8 @@ function ProjectFilePanel({
   onCollapsedChange: (collapsed: boolean) => void;
   onWidthChange: (width: number) => void;
   onOpenFile: (relativePath: string) => void;
+  onFileDeleted: (relativePath: string) => void;
+  onFileRenamed: (fromPath: string, toPath: string) => void;
 }) {
   const desktopBridge = useOpenClawDesktopBridge();
   const [tree, setTree] = useState<ProjectFileTree | null>(null);
@@ -763,19 +787,55 @@ function ProjectFilePanel({
     return () => media.removeEventListener('change', update);
   }, []);
 
-  useEffect(() => {
-    if (collapsed || loading || loadingProjectId.current === project.id) return;
+  const loadTree = useCallback(async () => {
+    if (loading) return;
     loadingProjectId.current = project.id;
     setLoading(true);
     setError('');
-    const loadTree = desktopBridge?.readLocalProjectTree
-      ? desktopBridge.readLocalProjectTree(project.id)
-      : fetchProjectFiles(project.id);
-    loadTree
-      .then((nextTree) => setTree(nextTree))
-      .catch((fetchError) => setError(fetchError instanceof Error ? fetchError.message : '读取文件树失败'))
-      .finally(() => setLoading(false));
-  }, [collapsed, desktopBridge, loading, project.id]);
+    try {
+      const nextTree = desktopBridge?.readLocalProjectTree
+        ? await desktopBridge.readLocalProjectTree(project.id)
+        : await fetchProjectFiles(project.id);
+      setTree(nextTree);
+    } catch (fetchError) {
+      setError(fetchError instanceof Error ? fetchError.message : '读取文件树失败');
+    } finally {
+      setLoading(false);
+    }
+  }, [desktopBridge, loading, project.id]);
+
+  useEffect(() => {
+    if (collapsed || loading || loadingProjectId.current === project.id) return;
+    void loadTree();
+  }, [collapsed, loadTree, loading, project.id]);
+
+  const refreshTree = useCallback(async () => {
+    loadingProjectId.current = '';
+    await loadTree();
+  }, [loadTree]);
+
+  const handleRenameFile = useCallback(async (node: ProjectFileNode) => {
+    const nextName = window.prompt('输入新的文件名', node.name)?.trim();
+    if (!nextName || nextName === node.name) return;
+    try {
+      const renamed = await renameProjectFile(project.id, node.relativePath, nextName);
+      await refreshTree();
+      onFileRenamed(node.relativePath, renamed.relativePath);
+    } catch (renameError) {
+      setError(renameError instanceof Error ? renameError.message : '重命名文件失败');
+    }
+  }, [onFileRenamed, project.id, refreshTree]);
+
+  const handleDeleteFile = useCallback(async (node: ProjectFileNode) => {
+    if (!window.confirm(`删除 ${node.name}？`)) return;
+    try {
+      await deleteProjectFile(project.id, node.relativePath);
+      await refreshTree();
+      onFileDeleted(node.relativePath);
+    } catch (deleteError) {
+      setError(deleteError instanceof Error ? deleteError.message : '删除文件失败');
+    }
+  }, [onFileDeleted, project.id, refreshTree]);
 
   const togglePath = (relativePath: string) => {
     setExpandedPaths((current) => {
@@ -828,7 +888,17 @@ function ProjectFilePanel({
         {error && <p className="px-3 py-2 font-pixel text-xs text-pixel-red">{error}</p>}
         {!loading && !error && tree?.root.children?.length === 0 && <p className="px-3 py-2 font-pixel text-xs text-pixel-black/55">当前工作区还没有文件。</p>}
         {!loading && !error && tree?.root.children?.map((node) => (
-          <FileTreeNode key={node.relativePath} node={node} depth={0} expandedPaths={expandedPaths} touchLike={touchLike} onToggle={togglePath} onOpenFile={onOpenFile} />
+          <FileTreeNode
+            key={node.relativePath}
+            node={node}
+            depth={0}
+            expandedPaths={expandedPaths}
+            touchLike={touchLike}
+            onToggle={togglePath}
+            onOpenFile={onOpenFile}
+            onRenameFile={handleRenameFile}
+            onDeleteFile={handleDeleteFile}
+          />
         ))}
         {tree?.truncated && <p className="px-3 py-2 font-pixel text-xs text-pixel-yellow">文件较多，列表已截断。</p>}
       </div>
@@ -845,6 +915,8 @@ function FileTreeNode({
   touchLike,
   onToggle,
   onOpenFile,
+  onRenameFile,
+  onDeleteFile,
 }: {
   node: ProjectFileNode;
   depth: number;
@@ -852,6 +924,8 @@ function FileTreeNode({
   touchLike: boolean;
   onToggle: (relativePath: string) => void;
   onOpenFile: (relativePath: string) => void;
+  onRenameFile: (node: ProjectFileNode) => void;
+  onDeleteFile: (node: ProjectFileNode) => void;
 }) {
   const expanded = expandedPaths.has(node.relativePath);
   const hasChildren = Boolean(node.children?.length);
@@ -862,13 +936,31 @@ function FileTreeNode({
   };
   return (
     <div>
-      <button type="button" onClick={handleClick} onDoubleClick={() => !node.isDirectory && onOpenFile(node.relativePath)} title={getNodeTooltip(node)} className="flex h-6 w-full items-center gap-1 overflow-hidden whitespace-nowrap pr-2 text-left hover:bg-pixel-yellow/30" style={{ paddingLeft }}>
-        <span className="w-3 shrink-0 text-center text-[10px] text-pixel-black/45">{node.isDirectory ? (expanded ? '-' : '+') : ''}</span>
-        <span className={`w-8 shrink-0 text-[10px] ${node.isDirectory ? 'text-pixel-orange' : node.name.endsWith('.pdf') ? 'text-pixel-red font-bold' : 'text-pixel-blue'}`}>{node.isDirectory ? 'DIR' : fileExtLabel(node.name)}</span>
-        <span className={`min-w-0 flex-1 truncate ${node.name.endsWith('.pdf') ? 'font-bold text-pixel-red' : ''}`}>{FILE_DESCRIPTIONS[node.name] || (node.isDirectory && DIR_DESCRIPTIONS[node.name] ? `${node.name} ${DIR_DESCRIPTIONS[node.name]}` : node.name)}</span>
-      </button>
+      <div className="group flex h-7 w-full items-center overflow-hidden whitespace-nowrap pr-1 hover:bg-pixel-yellow/30" style={{ paddingLeft }}>
+        <button type="button" onClick={handleClick} onDoubleClick={() => !node.isDirectory && onOpenFile(node.relativePath)} title={getNodeTooltip(node)} className="flex min-w-0 flex-1 items-center gap-1 text-left">
+          <span className="w-3 shrink-0 text-center text-[10px] text-pixel-black/45">{node.isDirectory ? (expanded ? '-' : '+') : ''}</span>
+          <span className={`w-8 shrink-0 text-[10px] ${node.isDirectory ? 'text-pixel-orange' : node.name.endsWith('.pdf') ? 'text-pixel-red font-bold' : 'text-pixel-blue'}`}>{node.isDirectory ? 'DIR' : fileExtLabel(node.name)}</span>
+          <span className={`min-w-0 flex-1 truncate ${node.name.endsWith('.pdf') ? 'font-bold text-pixel-red' : ''}`}>{FILE_DESCRIPTIONS[node.name] || (node.isDirectory && DIR_DESCRIPTIONS[node.name] ? `${node.name} ${DIR_DESCRIPTIONS[node.name]}` : node.name)}</span>
+        </button>
+        {!node.isDirectory && (
+          <span className="ml-1 hidden shrink-0 items-center gap-1 group-hover:flex group-focus-within:flex">
+            <button type="button" onClick={() => onRenameFile(node)} className="h-5 w-5 border-2 border-pixel-black bg-pixel-white font-pixel text-[10px] leading-none text-pixel-black hover:bg-pixel-yellow" title="重命名" aria-label={`重命名 ${node.name}`}>R</button>
+            <button type="button" onClick={() => onDeleteFile(node)} className="h-5 w-5 border-2 border-pixel-black bg-pixel-red font-pixel text-[10px] leading-none text-pixel-white hover:bg-pixel-gray" title="删除" aria-label={`删除 ${node.name}`}>x</button>
+          </span>
+        )}
+      </div>
       {node.isDirectory && expanded && hasChildren && node.children?.map((child) => (
-        <FileTreeNode key={child.relativePath} node={child} depth={depth + 1} expandedPaths={expandedPaths} touchLike={touchLike} onToggle={onToggle} onOpenFile={onOpenFile} />
+        <FileTreeNode
+          key={child.relativePath}
+          node={child}
+          depth={depth + 1}
+          expandedPaths={expandedPaths}
+          touchLike={touchLike}
+          onToggle={onToggle}
+          onOpenFile={onOpenFile}
+          onRenameFile={onRenameFile}
+          onDeleteFile={onDeleteFile}
+        />
       ))}
     </div>
   );
@@ -885,6 +977,7 @@ function TeamManagementCard({
   onAgentChange,
   onBindTargets,
   onViewComposition,
+  onConfigureAgent,
 }: {
   teams: Architecture[];
   agents: Lobster[];
@@ -896,6 +989,7 @@ function TeamManagementCard({
   onAgentChange: (agentId: string) => void;
   onBindTargets: () => void;
   onViewComposition: () => void;
+  onConfigureAgent: (agent: Lobster) => void;
 }) {
   const modeOptions: Array<{ mode: ProjectMode; label: string; count: number }> = [
     { mode: 'agent', label: '单 Agent', count: agents.length },
@@ -922,7 +1016,7 @@ function TeamManagementCard({
           );
         })}
       </div>
-      <div className="grid gap-2 sm:grid-cols-[1fr_auto_auto]">
+      <div className="grid gap-2 sm:grid-cols-[1fr_auto_auto_auto]">
         {activeMode === 'agent' ? (
           <select
             value={activeAgentId}
@@ -966,14 +1060,24 @@ function TeamManagementCard({
           管理绑定
         </button>
         {activeMode === 'agent' ? (
-          <Link
-            href={selectedAgent ? `/agent/${selectedAgent.id}` : '#'}
-            className={`inline-flex items-center justify-center border-2 border-pixel-black px-3 py-2 font-pixel text-xs ${
-              selectedAgent ? 'bg-pixel-blue text-pixel-white hover:bg-pixel-gray' : 'pointer-events-none bg-pixel-gray/60 text-pixel-white'
-            }`}
-          >
-            打开 Agent
-          </Link>
+          <>
+            <button
+              type="button"
+              onClick={() => selectedAgent && onConfigureAgent(selectedAgent)}
+              disabled={!selectedAgent}
+              className="border-2 border-pixel-black bg-pixel-white px-3 py-2 font-pixel text-xs text-pixel-black hover:bg-pixel-yellow disabled:bg-pixel-gray/60 disabled:text-pixel-white"
+            >
+              配置
+            </button>
+            <Link
+              href={selectedAgent ? `/agent/${selectedAgent.id}` : '#'}
+              className={`inline-flex items-center justify-center border-2 border-pixel-black px-3 py-2 font-pixel text-xs ${
+                selectedAgent ? 'bg-pixel-blue text-pixel-white hover:bg-pixel-gray' : 'pointer-events-none bg-pixel-gray/60 text-pixel-white'
+              }`}
+            >
+              打开 Agent
+            </Link>
+          </>
         ) : (
           <button
             type="button"
@@ -1296,11 +1400,11 @@ function TeamCompositionModal({
 
 function ModalFrame({ title, children, onClose, maxWidthClass }: { title: string; children: ReactNode; onClose: () => void; maxWidthClass: string }) {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-pixel-black/70 p-3" role="dialog" aria-modal="true">
+    <div className="fixed inset-0 z-[80] flex items-center justify-center bg-pixel-black/70 p-3" role="dialog" aria-modal="true">
       <div className={`max-h-[92vh] w-full overflow-auto border-4 border-pixel-black bg-pixel-white ${maxWidthClass}`} style={{ boxShadow: '8px 8px 0 #101010' }}>
-        <div className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b-4 border-pixel-black bg-pixel-white p-3">
+        <div className="sticky top-0 z-[90] flex items-center justify-between gap-3 border-b-4 border-pixel-black bg-pixel-white p-3">
           <p className="min-w-0 truncate font-pixel text-xl font-bold text-pixel-black">{title}</p>
-          <button type="button" onClick={onClose} className="h-10 w-10 shrink-0 border-2 border-pixel-black bg-pixel-red font-pixel text-xl leading-none text-pixel-white hover:bg-pixel-gray" aria-label="关闭">x</button>
+          <button type="button" onClick={(event) => { event.preventDefault(); event.stopPropagation(); onClose(); }} className="relative z-[100] h-10 w-10 shrink-0 border-2 border-pixel-black bg-pixel-red font-pixel text-xl leading-none text-pixel-white hover:bg-pixel-gray" aria-label="关闭">x</button>
         </div>
         <div className="p-4">{children}</div>
       </div>

@@ -325,11 +325,34 @@ const OPENCLAW_SCAFFOLD_FILES = new Set([
   'USER.md',
 ]);
 
+const PROJECT_FILE_PROTECTED_PREFIXES = [
+  '.git/',
+  '.openclaw/',
+  '.next/',
+  'build/',
+  'dist/',
+  'node_modules/',
+];
+
 function shouldHideProjectTreeEntry(name: string, relativePath: string, isDirectory: boolean): boolean {
   if (isDirectory && PROJECT_FILE_IGNORED_DIRS.has(name)) return true;
   if (relativePath === '.openclaw-project.json') return true;
   if (!isDirectory && relativePath === name && OPENCLAW_SCAFFOLD_FILES.has(name)) return true;
   return false;
+}
+
+function assertMutableProjectFilePath(relativePath: string): void {
+  if (!relativePath) {
+    throw new Error('请选择要操作的文件');
+  }
+  const normalized = normalizeRelativeProjectPath(relativePath);
+  if (
+    normalized === '.openclaw-project.json' ||
+    PROJECT_FILE_PROTECTED_PREFIXES.some((prefix) => normalized.startsWith(prefix)) ||
+    OPENCLAW_SCAFFOLD_FILES.has(path.basename(normalized))
+  ) {
+    throw new Error('该文件属于系统配置或运行态文件，不能在项目文件列表中修改');
+  }
 }
 
 function fileNodeFromStat(name: string, relativePath: string, stats: fs.Stats, children?: ProjectFileNode[]): ProjectFileNode {
@@ -460,6 +483,71 @@ export async function readProjectFileContent(
     truncated: stats.size > PROJECT_FILE_PREVIEW_MAX_BYTES,
     binary,
   };
+}
+
+export async function renameProjectFile(
+  userId: string,
+  projectId: string,
+  requestedPath: unknown,
+  requestedName: unknown
+): Promise<ProjectFileNode | null> {
+  const project = await getProject(userId, projectId);
+  if (!project) return null;
+
+  const relativePath = normalizeRequestedRelativePath(requestedPath);
+  assertMutableProjectFilePath(relativePath);
+
+  const newName = normalizeText(requestedName);
+  if (!newName || newName === '.' || newName === '..' || newName.includes('/') || newName.includes('\\') || path.basename(newName) !== newName) {
+    throw new Error('文件名无效');
+  }
+
+  const parentPath = normalizeRelativeProjectPath(path.posix.dirname(relativePath));
+  const nextRelativePath = parentPath && parentPath !== '.'
+    ? normalizeRelativeProjectPath(path.posix.join(parentPath, newName))
+    : newName;
+  assertMutableProjectFilePath(nextRelativePath);
+
+  const { rootPath, targetPath } = resolveProjectChildPath(project.workspacePath, relativePath);
+  const { targetPath: nextPath } = resolveProjectChildPath(project.workspacePath, nextRelativePath);
+  if (!fs.existsSync(targetPath)) {
+    throw new Error('文件不存在');
+  }
+  const stats = fs.statSync(targetPath);
+  if (!stats.isFile()) {
+    throw new Error('只能重命名文件，不能重命名文件夹');
+  }
+  if (fs.existsSync(nextPath)) {
+    throw new Error('目标文件名已存在');
+  }
+
+  fs.renameSync(targetPath, nextPath);
+  const nextStats = fs.statSync(nextPath);
+  return fileNodeFromStat(newName, normalizeRelativeProjectPath(path.relative(rootPath, nextPath)), nextStats);
+}
+
+export async function deleteProjectFile(
+  userId: string,
+  projectId: string,
+  requestedPath: unknown
+): Promise<boolean | null> {
+  const project = await getProject(userId, projectId);
+  if (!project) return null;
+
+  const relativePath = normalizeRequestedRelativePath(requestedPath);
+  assertMutableProjectFilePath(relativePath);
+
+  const { targetPath } = resolveProjectChildPath(project.workspacePath, relativePath);
+  if (!fs.existsSync(targetPath)) {
+    throw new Error('文件不存在');
+  }
+  const stats = fs.statSync(targetPath);
+  if (!stats.isFile()) {
+    throw new Error('只能删除文件，不能删除文件夹');
+  }
+
+  fs.unlinkSync(targetPath);
+  return true;
 }
 
 function normalizeRelativeProjectPath(value: string): string {

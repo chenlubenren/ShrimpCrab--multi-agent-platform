@@ -4,9 +4,13 @@ import { getRawDb } from '../db/index.js';
 import { createUser } from '../services/auth.service.js';
 import {
   createProject,
+  deleteProjectFile,
   deleteProject,
   getProject,
+  listProjectFiles,
   listProjects,
+  readProjectFileContent,
+  renameProjectFile,
   touchProject,
   updateProject,
 } from '../services/project.service.js';
@@ -67,6 +71,8 @@ async function main() {
     assert(fs.existsSync(first.workspacePath), `First project workspace missing: ${first.workspacePath}`);
     const metadataPath = path.join(first.workspacePath, '.openclaw-project.json');
     assert(fs.existsSync(metadataPath), 'Project metadata file was not created.');
+    const editableFilePath = path.join(first.workspacePath, 'notes.md');
+    fs.writeFileSync(editableFilePath, '# Smoke notes\n\nRename and delete me.\n', 'utf-8');
     const metadata = JSON.parse(fs.readFileSync(metadataPath, 'utf-8')) as {
       id?: string;
       name?: string;
@@ -137,6 +143,24 @@ async function main() {
     assert(updatedMetadata.ganttPlan?.[0]?.status === 'done', 'Updated metadata gantt status mismatch.');
     assert(updatedMetadata.ganttPlan?.[0]?.ownerTeamId === 'team-a', 'Updated metadata gantt ownerTeamId mismatch.');
     assert(updatedMetadata.gitBranch === 'release/project-a', 'Updated metadata gitBranch mismatch.');
+
+    const initialTree = await listProjectFiles(userId, first.id);
+    assert(initialTree?.root.children?.some((node) => node.relativePath === 'notes.md'), 'Project file tree did not include editable file.');
+    const initialContent = await readProjectFileContent(userId, first.id, 'notes.md');
+    assert(initialContent?.content.includes('Rename and delete me.'), 'Project file content read failed.');
+    const renamedFile = await renameProjectFile(userId, first.id, 'notes.md', 'notes-renamed.md');
+    assert(renamedFile?.relativePath === 'notes-renamed.md', 'Project file rename returned wrong relative path.');
+    assert(!fs.existsSync(editableFilePath), 'Original file still exists after rename.');
+    assert(fs.existsSync(path.join(first.workspacePath, 'notes-renamed.md')), 'Renamed file missing from workspace.');
+    let blockedProtectedRename = false;
+    try {
+      await renameProjectFile(userId, first.id, '.openclaw-project.json', 'project.json');
+    } catch {
+      blockedProtectedRename = true;
+    }
+    assert(blockedProtectedRename, 'Protected project metadata file rename was not blocked.');
+    assert(await deleteProjectFile(userId, first.id, 'notes-renamed.md'), 'Project file delete returned false.');
+    assert(!fs.existsSync(path.join(first.workspacePath, 'notes-renamed.md')), 'Renamed file still exists after delete.');
 
     assert(await deleteProject(userId, second.id), 'deleteProject returned false for existing project.');
     createdProjectIds.splice(createdProjectIds.indexOf(second.id), 1);

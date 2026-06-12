@@ -4,11 +4,13 @@ import path from 'path';
 import { authMiddleware, type AuthenticatedRequest } from '../middleware/auth.middleware.js';
 import {
   createProject,
+  deleteProjectFile,
   deleteProject,
   getProject,
   listProjectFiles,
   listProjects,
   readProjectFileContent,
+  renameProjectFile,
   touchProject,
   updateProject,
 } from '../services/project.service.js';
@@ -130,6 +132,38 @@ router.get('/:id/files/download', async (req: AuthenticatedRequest, res: Respons
     console.error('Download project file error:', error);
     res.status(400).json({
       message: error instanceof Error ? error.message : '下载文件失败',
+    });
+  }
+});
+
+router.patch('/:id/files', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const file = await renameProjectFile(req.user!.userId, String(req.params.id), req.body?.path, req.body?.name);
+    if (!file) {
+      res.status(404).json({ message: '项目不存在' });
+      return;
+    }
+    res.json({ file });
+  } catch (error) {
+    console.error('Rename project file error:', error);
+    res.status(400).json({
+      message: error instanceof Error ? error.message : '重命名文件失败',
+    });
+  }
+});
+
+router.delete('/:id/files', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const success = await deleteProjectFile(req.user!.userId, String(req.params.id), req.body?.path ?? req.query.path);
+    if (success === null) {
+      res.status(404).json({ message: '项目不存在' });
+      return;
+    }
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Delete project file error:', error);
+    res.status(400).json({
+      message: error instanceof Error ? error.message : '删除文件失败',
     });
   }
 });
