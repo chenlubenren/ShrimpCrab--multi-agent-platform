@@ -48,7 +48,7 @@ export default function ProjectDetailPage() {
   }, [openProjectAPI, project?.id]);
 
   return (
-    <div data-project-workspace-root="true" className="w-full pb-48 md:pb-16 lg:relative lg:left-1/2 lg:w-[85vw] lg:max-w-[1800px] lg:-translate-x-1/2">
+    <div data-project-workspace-root="true" className="mx-auto w-full max-w-[1800px] pb-48 md:pb-16">
       <div className="hidden md:block">
         <BackButton href="/projects" />
       </div>
