@@ -8,6 +8,8 @@ import { useAuthStore } from '@/store/useAuthStore';
 import { useStore } from '@/store/useStore';
 import { adoptOfficialLobster, fetchTeamTemplates, adoptTeamTemplate } from '@/lib/api';
 import { API_BASE } from '@/lib/runtime';
+import { NodeFlowPreview } from '@/components/architecture/NodeFlowPreview';
+import type { Architecture, ArchitectureEdge, ArchitectureNode, WorkflowDsl } from '@/types';
 
 type MarketTabKey = 'market' | 'team' | 'social';
 type MarketDisplayMode = 'grid' | 'category';
@@ -657,6 +659,10 @@ interface TeamTemplateData {
   memberCount: number;
   tags: string[];
   members: TeamTemplateMember[];
+  agents?: Architecture['agents'];
+  nodes?: ArchitectureNode[];
+  edges?: ArchitectureEdge[];
+  workflowDsl?: WorkflowDsl;
   workflow: { description: string; stages: string[] };
   communication: { mode: string; description: string };
   isolation: { description: string };
@@ -717,6 +723,37 @@ function TeamAvatarGrid({
 }
 
 function TeamWorkflowCanvas({ template }: { template: TeamTemplateData }) {
+  const graphArchitecture = useMemo<Architecture | null>(() => {
+    if (!template.nodes || template.nodes.length === 0) return null;
+    return {
+      id: template.id,
+      name: template.name,
+      description: template.description,
+      agents: template.agents ?? template.members.map((member, index) => ({
+        id: `node-agent-${index}`,
+        nodeId: `node-agent-${index}`,
+        name: member.name,
+        role: member.roleCode,
+        kind: index === 0 ? 'orchestrator' : 'worker',
+        status: 'standby',
+        isManager: index === 0,
+        linkedLobsterId: `template-agent-${template.id}-${index}`,
+      })),
+      nodes: template.nodes,
+      edges: template.edges ?? [],
+      workflowDsl: template.workflowDsl,
+      createdAt: '',
+    };
+  }, [template]);
+
+  if (graphArchitecture) {
+    return (
+      <div className="border-[3px] border-pixel-black bg-pixel-white p-3" style={{ boxShadow: '2px 2px 0px 0px rgba(16,16,16,0.16)' }}>
+        <NodeFlowPreview architecture={graphArchitecture} />
+      </div>
+    );
+  }
+
   const members = template.members.length > 0 ? template.members : [];
   const resolveStageMember = (stage: string, index: number) => {
     if (members.length === 0) return undefined;

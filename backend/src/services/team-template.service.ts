@@ -4,6 +4,7 @@ import path from 'path';
 import { createAgent, createCave, moveAgentToCave, type CreateAgentDto } from './agent.service.js';
 import { createArchitecture } from './architecture.service.js';
 import { resolveStoredPath } from './workspace.service.js';
+import type { WorkflowAgentKind, WorkflowDsl } from './workflow-executor.service.js';
 
 function generateId(): string {
   const bytes = new Uint8Array(16);
@@ -62,6 +63,41 @@ export interface TeamTemplate {
   isolation: {
     description: string;
   };
+}
+
+export interface TeamTemplateArchitectureAgent {
+  id: string;
+  nodeId: string;
+  name: string;
+  role: string;
+  kind: WorkflowAgentKind;
+  isManager: boolean;
+  linkedLobsterId?: string;
+  avatar?: string;
+  roleCode: string;
+  color: string;
+  status: 'standby';
+}
+
+export interface TeamTemplateCanvasNode {
+  id: string;
+  type: 'startNode' | 'agentNode' | 'endNode';
+  data: Record<string, unknown>;
+  position: { x: number; y: number };
+}
+
+export interface TeamTemplateCanvasEdge {
+  id: string;
+  source: string;
+  target: string;
+  label?: string;
+}
+
+export interface TeamTemplateWithGraph extends TeamTemplate {
+  agents: TeamTemplateArchitectureAgent[];
+  nodes: TeamTemplateCanvasNode[];
+  edges: TeamTemplateCanvasEdge[];
+  workflowDsl: WorkflowDsl;
 }
 
 export interface AdoptTeamResult {
@@ -250,14 +286,136 @@ const SUPERPOWERS_DEV_TEAM: TeamTemplate = {
 
 const TEAM_TEMPLATES: TeamTemplate[] = [AI_MED_RESEARCH_TEAM, SUPERPOWERS_DEV_TEAM];
 
-// ==================== Public API ====================
-
-export function listTeamTemplates(): TeamTemplate[] {
-  return TEAM_TEMPLATES;
+function getMemberKind(index: number): WorkflowAgentKind {
+  return index === 0 ? 'orchestrator' : 'worker';
 }
 
-export function getTeamTemplateById(id: string): TeamTemplate | null {
-  return TEAM_TEMPLATES.find((t) => t.id === id) || null;
+function buildTeamTemplateGraph(
+  template: TeamTemplate,
+  options: { teamName?: string; agentIds?: string[] } = {}
+): Pick<TeamTemplateWithGraph, 'agents' | 'nodes' | 'edges' | 'workflowDsl'> {
+  const teamName = options.teamName?.trim() || template.name;
+  const previewAgentIds = template.members.map((_, i) => `template-agent-${template.id}-${i}`);
+  const resolvedAgentIds = template.members.map((_, i) => options.agentIds?.[i] || previewAgentIds[i]);
+
+  const agents: TeamTemplateArchitectureAgent[] = template.members.map((member, i) => {
+    const nodeId = `node-agent-${i}`;
+    const memberAvatar = member.avatar ?? template.avatar;
+    return {
+      id: nodeId,
+      nodeId,
+      name: member.name,
+      role: member.roleCode,
+      kind: getMemberKind(i),
+      isManager: i === 0,
+      linkedLobsterId: resolvedAgentIds[i],
+      avatar: memberAvatar,
+      roleCode: member.roleCode,
+      color: member.color,
+      status: 'standby',
+    };
+  });
+
+  const workflowDsl: WorkflowDsl = {
+    schemaVersion: '1.0',
+    name: teamName,
+    description: template.workflow.description,
+    entryNodeId: 'node-start',
+    nodes: [
+      { id: 'node-start', type: 'start', label: '用户输入', outputKey: 'user_task' },
+      ...template.members.map((member, i) => ({
+        id: `node-agent-${i}`,
+        type: 'agent' as const,
+        label: member.name,
+        agentInstanceId: resolvedAgentIds[i],
+        role: member.roleCode,
+        kind: getMemberKind(i),
+        isManager: i === 0,
+      })),
+      { id: 'node-end', type: 'end', label: '最终输出', resultKey: 'final_output' },
+    ],
+    edges: [
+      { id: 'de-start-0', from: 'node-start', to: 'node-agent-0', label: '启动' },
+      ...template.members.slice(0, -1).map((_, i) => ({
+        id: `de-${i}-${i + 1}`,
+        from: `node-agent-${i}`,
+        to: `node-agent-${i + 1}`,
+        label: template.workflow.stages[i + 1] || '',
+      })),
+      { id: 'de-last-end', from: `node-agent-${template.members.length - 1}`, to: 'node-end', label: '完成' },
+    ],
+    execution: {
+      mode: 'dag',
+      maxConcurrency: 1,
+      timeoutSec: 3600,
+    },
+  };
+
+  const nodes: TeamTemplateCanvasNode[] = [
+    { id: 'node-start', type: 'startNode', data: { label: '用户输入' }, position: { x: 180, y: 0 } },
+    ...template.members.map((member, i) => {
+      const nodeId = `node-agent-${i}`;
+      const linkedLobsterId = resolvedAgentIds[i];
+      const memberAvatar = member.avatar ?? template.avatar;
+      return {
+        id: nodeId,
+        type: 'agentNode' as const,
+        data: {
+          label: member.name,
+          role: member.roleCode,
+          roleCode: member.roleCode,
+          kind: getMemberKind(i),
+          isManager: i === 0,
+          inputs: i === 0 ? ['用户任务'] : [template.workflow.stages[i] || '上游输出'],
+          outputs: [template.workflow.stages[i + 1] || '节点输出'],
+          agentId: nodeId,
+          linkedLobsterId,
+          linkedLobsterName: member.name,
+          linkedLobsterAvatar: memberAvatar,
+          isDeletable: true,
+          color: member.color,
+        },
+        position: { x: 60 + (i % 2) * 250, y: 100 + Math.floor(i / 2) * 160 },
+      };
+    }),
+    {
+      id: 'node-end',
+      type: 'endNode',
+      data: { label: '最终输出' },
+      position: { x: 180, y: 100 + Math.ceil(template.members.length / 2) * 160 },
+    },
+  ];
+
+  const edges: TeamTemplateCanvasEdge[] = [
+    { id: 'ce-start-0', source: 'node-start', target: 'node-agent-0', label: '启动' },
+    ...template.members.slice(0, -1).map((_, i) => ({
+      id: `ce-${i}-${i + 1}`,
+      source: `node-agent-${i}`,
+      target: `node-agent-${i + 1}`,
+      label: template.workflow.stages[i + 1] || '',
+    })),
+    { id: 'ce-last-end', source: `node-agent-${template.members.length - 1}`, target: 'node-end', label: '完成' },
+  ];
+
+  return { agents, nodes, edges, workflowDsl };
+}
+
+function withTemplateGraph(template: TeamTemplate): TeamTemplateWithGraph {
+  return {
+    ...template,
+    ...buildTeamTemplateGraph(template),
+  };
+}
+
+// ==================== Public API ====================
+
+export function listTeamTemplates(): TeamTemplateWithGraph[] {
+  return TEAM_TEMPLATES.map(withTemplateGraph);
+}
+
+export function getTeamTemplateById(id: string): TeamTemplateWithGraph | null {
+  const template = TEAM_TEMPLATES.find((t) => t.id === id);
+  return template ? withTemplateGraph(template) : null;
 }
 
 export async function adoptTeamTemplate(
@@ -278,7 +436,6 @@ export async function adoptTeamTemplate(
 
     // 2. Create each agent and assign to the cave
     const agentIds: string[] = [];
-    const architectureAgents: Array<Record<string, unknown>> = [];
 
     for (const member of template.members) {
       const memberPlatform = member.platform ?? template.platform;
@@ -373,104 +530,20 @@ export async function adoptTeamTemplate(
         }
       }
 
-      architectureAgents.push({
-        id: `node-agent-${architectureAgents.length}`,
-        nodeId: `node-agent-${architectureAgents.length}`,
-        name: agent.name,
-        role: member.roleCode,
-        kind: architectureAgents.length === 0 ? 'orchestrator' : 'worker',
-        isManager: architectureAgents.length === 0,
-        linkedLobsterId: agent.id,
-        avatar: memberAvatar,
-        roleCode: member.roleCode,
-        color: member.color,
-        status: 'standby',
-      });
     }
 
-    // 3. Build workflow DSL with start/end boundary nodes
-    const dslNodes = [
-      { id: 'node-start', type: 'start' as const, label: '用户输入', outputKey: 'user_task' },
-      ...template.members.map((m, i) => ({
-        id: `node-agent-${i}`,
-        type: 'agent' as const,
-        label: m.name,
-        agentInstanceId: agentIds[i],
-        role: m.roleCode,
-        kind: (i === 0 ? 'orchestrator' : 'worker') as 'orchestrator' | 'worker',
-      })),
-      { id: 'node-end', type: 'end' as const, label: '最终输出', resultKey: 'final_output' },
-    ];
-
-    const dslEdges = [
-      { id: 'de-start-0', from: 'node-start', to: 'node-agent-0', label: '启动' },
-      ...template.members.slice(0, -1).map((_, i) => ({
-        id: `de-${i}-${i + 1}`,
-        from: `node-agent-${i}`,
-        to: `node-agent-${i + 1}`,
-        label: template.workflow.stages[i + 1] || '',
-      })),
-      { id: `de-last-end`, from: `node-agent-${template.members.length - 1}`, to: 'node-end', label: '完成' },
-    ];
-
-    const workflowDsl = {
-      schemaVersion: '1.0' as const,
-      name: finalTeamName,
-      description: template.workflow.description,
-      entryNodeId: 'node-start',
-      nodes: dslNodes,
-      edges: dslEdges,
-      execution: {
-        mode: 'dag' as const,
-        maxConcurrency: 1,
-        timeoutSec: 3600,
-      },
-    };
-
-    // 4. Create canvas nodes (for visual editing) + architecture
-    const canvasNodes = [
-      { id: 'node-start', type: 'startNode', data: { label: '用户输入' }, position: { x: 180, y: 0 } },
-      ...template.members.map((m, i) => ({
-        id: `node-agent-${i}`,
-        type: 'agentNode',
-        data: {
-          label: m.name,
-          role: m.roleCode,
-          roleCode: m.roleCode,
-          kind: i === 0 ? 'orchestrator' : 'worker',
-          isManager: i === 0,
-          inputs: i === 0 ? ['用户任务'] : [template.workflow.stages[i] || '上游输出'],
-          outputs: [template.workflow.stages[i + 1] || '节点输出'],
-          agentId: `node-agent-${i}`,
-          linkedLobsterId: agentIds[i],
-          linkedLobsterName: `${m.name}`,
-          linkedLobsterAvatar: m.avatar ?? template.avatar,
-          isDeletable: true,
-          color: m.color,
-        },
-        position: { x: 60 + (i % 2) * 250, y: 100 + Math.floor(i / 2) * 160 },
-      })),
-      { id: 'node-end', type: 'endNode', data: { label: '最终输出' }, position: { x: 180, y: 100 + Math.ceil(template.members.length / 2) * 160 } },
-    ];
-
-    const canvasEdges = [
-      { id: 'ce-start-0', source: 'node-start', target: 'node-agent-0', label: '启动' },
-      ...template.members.slice(0, -1).map((_, i) => ({
-        id: `ce-${i}-${i + 1}`,
-        source: `node-agent-${i}`,
-        target: `node-agent-${i + 1}`,
-        label: '',
-      })),
-      { id: 'ce-last-end', source: `node-agent-${template.members.length - 1}`, target: 'node-end', label: '完成' },
-    ];
+    const materializedGraph = buildTeamTemplateGraph(template, {
+      teamName: finalTeamName,
+      agentIds,
+    });
 
     const architecture = await createArchitecture(userId, {
       name: finalTeamName,
       description: template.description,
-      agents: architectureAgents,
-      nodes: canvasNodes,
-      edges: canvasEdges,
-      workflowDsl,
+      agents: materializedGraph.agents,
+      nodes: materializedGraph.nodes,
+      edges: materializedGraph.edges,
+      workflowDsl: materializedGraph.workflowDsl,
     });
 
     return {
