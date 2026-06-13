@@ -29,6 +29,7 @@ import { PixelButton } from '@/components/ui/PixelButton';
 import { ArchitectureAgent, Lobster, WorkflowAgentKind } from '@/types';
 import { useStore } from '@/store/useStore';
 import { LobsterSprite } from '@/components/lobster/LobsterSprite';
+import { AgentNodeAvatar } from '@/components/architecture/AgentNodeAvatar';
 import type { ArchTemplate } from '@/lib/archTemplates';
 import { getConnectionValidationError } from '@/lib/workflowDsl';
 
@@ -40,6 +41,9 @@ interface AgentNodeData {
   inputs: string[];
   outputs: string[];
   linkedLobster?: Lobster | null;
+  linkedLobsterId?: string;
+  linkedLobsterName?: string;
+  linkedLobsterAvatar?: string;
   agentId: string;
   isDeletable?: boolean;
   [key: string]: unknown;
@@ -47,10 +51,24 @@ interface AgentNodeData {
 
 // ─── Agent Node ────────────────────────────────────────────────────────────────
 export function AgentNode({ data, selected }: NodeProps<Node<AgentNodeData> >) {
+  const linkedLobster = data.linkedLobster ?? (
+    data.linkedLobsterId
+      ? {
+          id: data.linkedLobsterId,
+          name: data.linkedLobsterName || data.label || 'Agent',
+          role: data.role || 'Agent',
+          avatar: data.linkedLobsterAvatar,
+          status: 'idle',
+          createdAt: '',
+          conversations: [],
+        } as Lobster
+      : null
+  );
+
   return (
     <div
       className={`
-        px-4 py-3 min-w-[160px] border-4 border-pixel-black
+        px-4 py-3 min-w-[190px] border-4 border-pixel-black
         ${data.isManager ? 'bg-pixel-blue' : 'bg-pixel-green'}
         ${selected ? 'ring-4 ring-pixel-yellow ring-offset-2' : ''}
         ${!data.isDeletable ? 'opacity-90' : ''}
@@ -65,7 +83,8 @@ export function AgentNode({ data, selected }: NodeProps<Node<AgentNodeData> >) {
         style={{ background: '#22c55e', border: '3px solid #101010', width: 14, height: 14 }}
       />
 
-      <div className="flex flex-col items-center gap-1">
+      <div className="flex flex-col items-center gap-2">
+        <AgentNodeAvatar lobster={linkedLobster} size="sm" />
         {data.isManager && (
           <span className="bg-pixel-red text-pixel-white px-2 py-0.5 font-pixel text-xs">管理员</span>
         )}
@@ -80,9 +99,9 @@ export function AgentNode({ data, selected }: NodeProps<Node<AgentNodeData> >) {
             {AGENT_KIND_OPTIONS.find((option) => option.value === data.kind)?.label ?? data.kind}
           </span>
         )}
-        {data.linkedLobster && (
+        {linkedLobster && (
           <span className="bg-pixel-black/30 text-pixel-white/80 px-2 py-0.5 font-pixel text-xs">
-            🟢 {data.linkedLobster.name}
+            {linkedLobster.name}
           </span>
         )}
       </div>
@@ -439,8 +458,18 @@ interface NodeCanvasProps {
 
 function getConcreteAgentId(lobster?: Lobster | null): string | undefined {
   const id = lobster?.id?.trim();
-  if (!id || /^(lobster|agent|arch)-/i.test(id)) return undefined;
+  if (!id || /^(lobster|agent|arch|node|slot)-/i.test(id)) return undefined;
   return id;
+}
+
+function getConcreteAgentIdFromNodeData(data: AgentNodeData): string | undefined {
+  const linkedId = getConcreteAgentId(data.linkedLobster);
+  if (linkedId) return linkedId;
+  const linkedLobsterId = data.linkedLobsterId?.trim();
+  if (linkedLobsterId) return linkedLobsterId;
+  const legacyAgentId = data.agentId?.trim();
+  if (!legacyAgentId || /^(lobster|agent|arch|node|slot)-/i.test(legacyAgentId)) return undefined;
+  return legacyAgentId;
 }
 
 function buildAgentsFromNodes(nodes: Node[]): ArchitectureAgent[] {
@@ -458,7 +487,7 @@ function buildAgentsFromNodes(nodes: Node[]): ArchitectureAgent[] {
         isManager: d.isManager,
         inputs: d.inputs ?? [],
         outputs: d.outputs ?? [],
-        linkedLobsterId: getConcreteAgentId(d.linkedLobster),
+        linkedLobsterId: getConcreteAgentIdFromNodeData(d),
         openclawPath: d.linkedLobster?.openclawPath,
         openclawPort: d.linkedLobster?.openclawPort,
       };
@@ -665,6 +694,21 @@ export default function NodeCanvas({
     [setNodes, syncAgents]
   );
 
+  const patchNodeData = useCallback(
+    (nodeId: string, patch: Partial<AgentNodeData>) => {
+      setNodes((nds) => {
+        const updated = nds.map((node) =>
+          node.id === nodeId
+            ? { ...node, data: { ...node.data, ...patch } }
+            : node
+        );
+        syncAgents(updated);
+        return updated;
+      });
+    },
+    [setNodes, syncAgents]
+  );
+
   // Add a new node from template
   const addNodeFromTemplate = useCallback(
     (template: NodeTemplate) => {
@@ -752,14 +796,26 @@ export default function NodeCanvas({
 
   const handleLinkLobster = useCallback(
     (nodeId: string, lobster: Lobster | null) => {
-      updateNodeData(nodeId, 'linkedLobster', lobster);
-      if (lobster) {
-        updateNodeData(nodeId, 'openclawPath', lobster.openclawPath);
-        updateNodeData(nodeId, 'openclawPort', lobster.openclawPort);
-      }
+      patchNodeData(nodeId, lobster
+        ? {
+            linkedLobster: lobster,
+            linkedLobsterId: lobster.id,
+            linkedLobsterName: lobster.name,
+            linkedLobsterAvatar: lobster.avatar,
+            openclawPath: lobster.openclawPath,
+            openclawPort: lobster.openclawPort,
+          }
+        : {
+            linkedLobster: null,
+            linkedLobsterId: undefined,
+            linkedLobsterName: undefined,
+            linkedLobsterAvatar: undefined,
+            openclawPath: undefined,
+            openclawPort: undefined,
+          });
       setShowLobsterPicker(false);
     },
-    [updateNodeData]
+    [patchNodeData]
   );
 
   return (
@@ -1207,7 +1263,8 @@ export default function NodeCanvas({
               ) : (
                 <div className="space-y-2 max-h-[300px] overflow-y-auto">
                   {lobsters.map((lobster) => {
-                    const isSelected = (selectedNodeData as AgentNodeData | undefined)?.linkedLobster?.id === lobster.id;
+                    const selectedData = selectedNodeData as AgentNodeData | undefined;
+                    const isSelected = selectedData?.linkedLobster?.id === lobster.id || selectedData?.linkedLobsterId === lobster.id;
                   return (
                     <motion.button
                       key={lobster.id}

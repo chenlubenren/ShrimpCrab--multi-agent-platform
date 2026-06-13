@@ -81,6 +81,7 @@ interface LobsterStore {
   addArchitecture: (architecture: Architecture) => void;
   createArchitectureAPI: (architecture: Architecture) => Promise<Architecture>;
   updateArchitectureAPI: (archId: string, updates: Partial<Architecture>) => Promise<Architecture>;
+  deleteArchitectureAPI: (archId: string) => Promise<void>;
   updateAgentLink: (archId: string, agentId: string, lobsterId: string | null) => void;
   setActiveAgent: (id: string | null) => void;
   setCurrentTask: (task: string | null) => void;
@@ -551,6 +552,16 @@ export const useStore = create<LobsterStore>()(
       ),
     }));
     return updated;
+  },
+  deleteArchitectureAPI: async (archId) => {
+    await api.deleteArchitecture(archId);
+    set((state) => ({
+      architectures: state.architectures.filter((architecture) => architecture.id !== archId),
+      projects: state.projects.map((project) => ({
+        ...project,
+        teamIds: project.teamIds.filter((id) => id !== archId),
+      })),
+    }));
   },
   updateAgentStatus: (archId, agentId, status) => set((state) => ({
     architectures: state.architectures.map((architecture) =>

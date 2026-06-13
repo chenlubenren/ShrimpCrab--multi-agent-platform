@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
 import Link from 'next/link';
 import { useStore } from '@/store/useStore';
@@ -11,12 +11,30 @@ import { BackButton } from '@/components/ui/BackButton';
 import { FeishuIntegrationCard } from '@/components/integration/FeishuIntegrationCard';
 
 export default function MyArchitecturesPage() {
-  const { architectures, lobsters, fetchArchitectures, fetchAgents } = useStore();
+  const { architectures, lobsters, fetchArchitectures, fetchAgents, deleteArchitectureAPI } = useStore();
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState('');
 
   useEffect(() => {
     void fetchArchitectures();
     void fetchAgents();
   }, [fetchAgents, fetchArchitectures]);
+
+  const handleDeleteTeam = async (arch: Architecture) => {
+    if (typeof window === 'undefined') return;
+    const ok = window.confirm(`确定删除团队「${arch.name}」吗？这会删除团队架构、运行记录和相关配置。`);
+    if (!ok) return;
+
+    setDeletingId(arch.id);
+    setDeleteError('');
+    try {
+      await deleteArchitectureAPI(arch.id);
+    } catch (error) {
+      setDeleteError(error instanceof Error ? error.message : '删除团队失败');
+    } finally {
+      setDeletingId(null);
+    }
+  };
 
   return (
     <div>
@@ -41,6 +59,11 @@ export default function MyArchitecturesPage() {
       {/* Architecture Grid */}
       {architectures.length > 0 ? (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          {deleteError && (
+            <div className="col-span-full border-3 border-pixel-black bg-pixel-red px-4 py-3 font-pixel text-sm text-pixel-white">
+              {deleteError}
+            </div>
+          )}
           {architectures.map((arch: Architecture, index: number) => (
             <motion.div
               key={arch.id}
@@ -50,8 +73,22 @@ export default function MyArchitecturesPage() {
             >
               <PixelCard
                 title={arch.name}
-                className="h-full"
+                className="group relative h-full"
               >
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    void handleDeleteTeam(arch);
+                  }}
+                  disabled={deletingId === arch.id}
+                  aria-label={`删除团队 ${arch.name}`}
+                  title="删除团队"
+                  className="absolute right-3 top-3 z-10 hidden h-8 w-8 items-center justify-center border-3 border-pixel-black bg-pixel-red font-pixel text-base leading-none text-pixel-white shadow-[3px_3px_0_#101010] transition-colors hover:bg-pixel-yellow hover:text-pixel-black disabled:opacity-60 group-hover:flex"
+                >
+                  X
+                </button>
                 <p className="font-pixel text-sm text-pixel-black/70 mb-4 line-clamp-2">
                   {arch.description}
                 </p>

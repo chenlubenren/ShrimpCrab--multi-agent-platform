@@ -523,6 +523,18 @@ export async function updateArchitecture(id: string, data: Partial<Architecture>
   return payload.architecture || payload;
 }
 
+export async function deleteArchitecture(id: string): Promise<{ success: boolean }> {
+  const res = await fetch(`${API_BASE}/api/architectures/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    headers: getAuthHeaders(),
+  });
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(payload.message || '删除团队失败');
+  }
+  return payload;
+}
+
 export async function updateArchitectureStatus(
   archId: string,
   agentId: string,

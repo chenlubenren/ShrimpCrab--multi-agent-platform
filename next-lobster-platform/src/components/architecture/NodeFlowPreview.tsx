@@ -25,12 +25,17 @@ import {
 } from '@/types';
 import { useStore } from '@/store/useStore';
 import { LobsterSprite } from '@/components/lobster/LobsterSprite';
+import { AgentNodeAvatar } from '@/components/architecture/AgentNodeAvatar';
 
 type PreviewNodeData = Record<string, unknown> & {
   label?: string;
   role?: string;
   isManager?: boolean;
   agentId?: string;
+  linkedLobsterId?: string;
+  linkedLobsterName?: string;
+  linkedLobsterAvatar?: string;
+  avatar?: string;
   description?: string;
   workflowStatus?: WorkflowNodeRunState['status'];
   workflowTask?: string;
@@ -87,6 +92,50 @@ function shortPreviewText(value: string | undefined, maxLength = 56): string {
   return normalized.length > maxLength ? `${normalized.slice(0, maxLength)}...` : normalized;
 }
 
+function findArchitectureAgentForNode(architecture: Architecture, nodeId: string, data?: Record<string, unknown>): ArchitectureAgent | null {
+  const dataAgentId = typeof data?.agentId === 'string' ? data.agentId : undefined;
+  const dataLinkedId = typeof data?.linkedLobsterId === 'string' ? data.linkedLobsterId : undefined;
+  return architecture.agents.find((agent) =>
+    agent.id === nodeId ||
+    agent.nodeId === nodeId ||
+    (dataAgentId && (agent.id === dataAgentId || agent.nodeId === dataAgentId || agent.linkedLobsterId === dataAgentId)) ||
+    (dataLinkedId && agent.linkedLobsterId === dataLinkedId)
+  ) ?? null;
+}
+
+function isLikelyNodeId(value: string | undefined): boolean {
+  return !value || /^(lobster|agent|arch|node|slot)-/i.test(value);
+}
+
+function enrichAgentNodeData(
+  architecture: Architecture,
+  nodeId: string,
+  data: Record<string, unknown>,
+  lobsters: Lobster[]
+): Record<string, unknown> {
+  if (data.type && data.type !== 'agentNode') return data;
+  const agent = findArchitectureAgentForNode(architecture, nodeId, data);
+  const dataAgentId = typeof data.agentId === 'string' && !isLikelyNodeId(data.agentId)
+    ? data.agentId
+    : undefined;
+  const linkedId = typeof data.linkedLobsterId === 'string'
+    ? data.linkedLobsterId
+    : agent?.linkedLobsterId ?? dataAgentId;
+  const lobster = linkedId ? lobsters.find((item) => item.id === linkedId) : undefined;
+
+  return {
+    ...data,
+    label: data.label ?? agent?.name,
+    role: data.role ?? agent?.role,
+    kind: data.kind ?? agent?.kind,
+    isManager: typeof data.isManager === 'boolean' ? data.isManager : agent?.isManager,
+    agentId: typeof data.agentId === 'string' ? data.agentId : agent?.nodeId ?? agent?.id ?? nodeId,
+    linkedLobsterId: linkedId,
+    linkedLobsterName: lobster?.name ?? agent?.name ?? data.linkedLobsterName,
+    linkedLobsterAvatar: lobster?.avatar ?? data.linkedLobsterAvatar,
+  };
+}
+
 // ─── Preview Node Components (simplified, with handles for visibility) ──────────────
 function PreviewAgentNode({
   data,
@@ -98,6 +147,17 @@ function PreviewAgentNode({
   const status = data.workflowStatus;
   const isRunning = status === 'running';
   const title = displayAgentLabel(data.workflowAgentName || data.label, data.isManager);
+  const nodeLobster = data.linkedLobsterId
+    ? {
+        id: data.linkedLobsterId,
+        name: data.linkedLobsterName || data.workflowAgentName || data.label || 'Agent',
+        role: data.role || 'Agent',
+        avatar: data.linkedLobsterAvatar || data.avatar,
+        status: 'idle',
+        createdAt: '',
+        conversations: [],
+      } as Lobster
+    : null;
   const kind = typeof data.workflowKind === 'string'
     ? data.workflowKind
     : typeof data.kind === 'string'
@@ -107,7 +167,7 @@ function PreviewAgentNode({
     <motion.div
       animate={isRunning ? { y: [0, -3, 0] } : { y: 0 }}
       transition={isRunning ? { duration: 1, repeat: Infinity, ease: 'easeInOut' } : { duration: 0.15 }}
-      className={`relative px-4 py-3 min-w-[170px] border-4 border-pixel-black ${
+      className={`relative px-4 py-3 min-w-[190px] border-4 border-pixel-black ${
         data.isManager ? 'bg-pixel-blue' : 'bg-pixel-green'
       } ${workflowFrameClass(status, selected)}`}
       style={{ boxShadow: selected || status ? '6px 6px 0px 0px #101010' : '4px 4px 0px 0px #101010' }}
@@ -131,7 +191,8 @@ function PreviewAgentNode({
         position={Position.Right}
         style={{ background: '#22c55e', border: '3px solid #101010', width: 12, height: 12 }}
       />
-      <div className="flex flex-col items-center gap-1">
+      <div className="flex flex-col items-center gap-2">
+        <AgentNodeAvatar lobster={nodeLobster} size="sm" />
         {data.isManager && (
           <span className="bg-pixel-red text-pixel-white px-2 py-0.5 font-pixel text-xs">管理员</span>
         )}
@@ -327,7 +388,7 @@ const edgeTypes = {
 };
 
 // ─── Build preview nodes & edges from architecture ─────────────────────────────
-function buildPreviewGraph(architecture: Architecture) {
+function buildPreviewGraph(architecture: Architecture, lobsters: Lobster[]) {
   const { nodes: archNodes, edges: archEdges } = architecture;
 
   // If architecture has explicit nodes/edges, use them directly (preserve saved positions)
@@ -353,7 +414,9 @@ function buildPreviewGraph(architecture: Architecture) {
         id: n.id,
         type: n.type,
         position,
-        data: n.data as Record<string, unknown>,
+        data: n.type === 'agentNode'
+          ? enrichAgentNodeData(architecture, n.id, n.data as Record<string, unknown>, lobsters)
+          : n.data as Record<string, unknown>,
       };
     });
 
@@ -398,6 +461,8 @@ function buildPreviewGraph(architecture: Architecture) {
       outputs: agent.outputs ?? [],
       agentId: agent.id,
       linkedLobsterId: agent.linkedLobsterId,
+      linkedLobsterName: lobsters.find((item) => item.id === agent.linkedLobsterId)?.name,
+      linkedLobsterAvatar: lobsters.find((item) => item.id === agent.linkedLobsterId)?.avatar,
       linkedLobster: null,
       isDeletable: false,
     } as Record<string, unknown>,
@@ -512,12 +577,12 @@ export function NodeFlowPreview({ architecture, execution }: NodeFlowPreviewProp
   }, [hoveredNodeId]);
 
   const { previewNodes, previewEdges } = useMemo(() => {
-    const g = buildPreviewGraph(architecture);
+    const g = buildPreviewGraph(architecture, lobsters);
     return {
       previewNodes: enforceMinimumHorizontalGap(g.previewNodes),
       previewEdges: g.previewEdges,
     };
-  }, [architecture]);
+  }, [architecture, lobsters]);
 
   const activeEdgeIds = useMemo(() => buildActiveExecutionEdgeIds(execution), [execution]);
 
@@ -560,7 +625,11 @@ export function NodeFlowPreview({ architecture, execution }: NodeFlowPreviewProp
   // Build a map from pipeline id → agent for rich detail lookups
   const agentMap = useMemo(() => {
     const m = new Map<string, ArchitectureAgent>();
-    architecture.agents.forEach((a) => m.set(a.id, a));
+    architecture.agents.forEach((a) => {
+      m.set(a.id, a);
+      if (a.nodeId) m.set(a.nodeId, a);
+      if (a.linkedLobsterId) m.set(a.linkedLobsterId, a);
+    });
     return m;
   }, [architecture.agents]);
 
@@ -574,15 +643,18 @@ export function NodeFlowPreview({ architecture, execution }: NodeFlowPreviewProp
     if (!activeNodeId) return null;
     // Nodes branch: data.agentId holds the real agent ID created at save time
     const agentIdFromNodeData = (activeNode?.data as { agentId?: string } | undefined)?.agentId;
+    const linkedIdFromNodeData = (activeNode?.data as { linkedLobsterId?: string } | undefined)?.linkedLobsterId;
     return (
       (agentIdFromNodeData ? agentMap.get(agentIdFromNodeData) : null) ??
+      (linkedIdFromNodeData ? agentMap.get(linkedIdFromNodeData) : null) ??
       agentMap.get(activeNodeId) ??
       null
     );
   }, [activeNodeId, activeNode, agentMap]);
 
-  const linkedLobster = activeAgent?.linkedLobsterId
-    ? lobsters.find((l: Lobster) => l.id === activeAgent.linkedLobsterId)
+  const activeNodeLinkedId = (activeNode?.data as { linkedLobsterId?: string } | undefined)?.linkedLobsterId;
+  const linkedLobster = (activeAgent?.linkedLobsterId || activeNodeLinkedId)
+    ? lobsters.find((l: Lobster) => l.id === (activeAgent?.linkedLobsterId || activeNodeLinkedId))
     : null;
 
   const handleNodeClick: NodeMouseHandler = (evt, node) => {

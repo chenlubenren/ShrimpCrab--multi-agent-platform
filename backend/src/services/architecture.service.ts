@@ -1,9 +1,9 @@
 import path from 'path';
 import crypto from 'crypto';
-import { and, desc, eq } from 'drizzle-orm';
+import { and, desc, eq, inArray } from 'drizzle-orm';
 import { getDb } from '../db/index.js';
-import { teams, type Team } from '../db/schema.js';
-import { deleteFile, getUserWorkspaceRoot, readFile, writeFile } from './workspace.service.js';
+import { deliverables, feishuIntegrations, projects, teamMembers, teamRuns, teamRunSteps, teams, type Team } from '../db/schema.js';
+import { deleteDirectory, deleteFile, getUserWorkspaceRoot, readFile, writeFile } from './workspace.service.js';
 
 type ArchitectureAgent = Record<string, unknown>;
 type ArchitectureNode = Record<string, unknown>;
@@ -248,9 +248,53 @@ export async function deleteArchitecture(userId: string, architectureId: string)
 
   if (!rows[0]) return false;
 
+  const runRows = await db
+    .select({ id: teamRuns.id })
+    .from(teamRuns)
+    .where(and(eq(teamRuns.teamId, architectureId), eq(teamRuns.userId, userId)));
+  const runIds = runRows.map((run) => run.id);
+
+  if (runIds.length > 0) {
+    await db.delete(teamRunSteps).where(inArray(teamRunSteps.runId, runIds));
+    await db.delete(deliverables).where(and(eq(deliverables.userId, userId), inArray(deliverables.executionId, runIds)));
+  }
+
+  await db.delete(teamRuns).where(and(eq(teamRuns.teamId, architectureId), eq(teamRuns.userId, userId)));
+  await db.delete(teamMembers).where(eq(teamMembers.teamId, architectureId));
+  await db.delete(feishuIntegrations).where(and(
+    eq(feishuIntegrations.userId, userId),
+    eq(feishuIntegrations.scope, 'team'),
+    eq(feishuIntegrations.subjectId, architectureId)
+  ));
+
+  const projectRows = await db
+    .select({ id: projects.id, teamIds: projects.teamIds })
+    .from(projects)
+    .where(eq(projects.userId, userId));
+  const now = new Date();
+  for (const project of projectRows) {
+    const teamIds = parseJsonStringArray(project.teamIds).filter((id) => id !== architectureId);
+    if (teamIds.length !== parseJsonStringArray(project.teamIds).length) {
+      await db
+        .update(projects)
+        .set({ teamIds: JSON.stringify(teamIds), updatedAt: now })
+        .where(and(eq(projects.id, project.id), eq(projects.userId, userId)));
+    }
+  }
+
   await db.delete(teams).where(and(eq(teams.id, architectureId), eq(teams.userId, userId)));
   deleteFile(rows[0].manifestPath);
+  deleteDirectory(path.dirname(rows[0].manifestPath));
   return true;
+}
+
+function parseJsonStringArray(value: string): string[] {
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === 'string') : [];
+  } catch {
+    return [];
+  }
 }
 
 function writeArchitectureManifest(manifestPath: string, architecture: ArchitecturePayload): void {
